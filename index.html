@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>聪明钱监控面板</title>
+<style>
+  :root {
+    --bg: #0d1117; --card: #161b22; --border: #30363d;
+    --text: #e6edf3; --text2: #8b949e; --green: #3fb950;
+    --red: #f85149; --yellow: #d29922; --blue: #58a6ff;
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { background: var(--bg); color: var(--text); font-family: -apple-system, 'Segoe UI', sans-serif; padding: 16px; }
+
+  .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
+  .header h1 { font-size: 22px; font-weight: 600; }
+  .controls { display: flex; gap: 8px; align-items: center; }
+  .controls input, .controls select {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 6px 12px; border-radius: 6px; font-size: 14px;
+  }
+  .controls button {
+    background: var(--blue); color: #fff; border: none; padding: 6px 16px;
+    border-radius: 6px; cursor: pointer; font-size: 14px;
+  }
+  .controls button:hover { opacity: 0.85; }
+  .coin-tabs { display: flex; gap: 4px; }
+  .coin-tab {
+    background: var(--card); border: 1px solid var(--border); color: var(--text2);
+    padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
+    transition: all 0.15s;
+  }
+  .coin-tab:hover { border-color: var(--blue); color: var(--text); }
+  .coin-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .coin-tab .remove-btn {
+    display: none; margin-left: 4px; font-size: 10px; cursor: pointer;
+    color: var(--red); font-weight: 700;
+  }
+  .coin-tabs.editing .coin-tab .remove-btn { display: inline; }
+  .coin-tabs.editing .coin-tab { padding-right: 6px; }
+  .edit-toggle {
+    background: none; border: 1px solid var(--border); color: var(--text2);
+    padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  }
+  .edit-toggle:hover { border-color: var(--blue); color: var(--text); }
+  .add-coin-input {
+    background: var(--card); border: 1px solid var(--border); color: var(--text);
+    padding: 4px 8px; border-radius: 6px; font-size: 12px; width: 80px;
+    display: none;
+  }
+  .coin-tabs.editing + .add-coin-wrap .add-coin-input { display: inline-block; }
+  .add-coin-btn {
+    background: var(--green); color: #fff; border: none;
+    padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
+    display: none;
+  }
+  .coin-tabs.editing + .add-coin-wrap .add-coin-btn { display: inline-block; }
+  .status { font-size: 13px; color: var(--text2); }
+  .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
+  .status .live { background: var(--green); animation: pulse 2s infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+
+  .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .stat-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; text-align: center;
+  }
+  .stat-card .label { font-size: 12px; color: var(--text2); margin-bottom: 6px; }
+  .stat-card .value { font-size: 24px; font-weight: 700; }
+  .stat-card .sub { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  .signals {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .signals h3 { font-size: 15px; margin-bottom: 10px; color: var(--blue); }
+  .signal-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
+  .signal-icon { font-size: 16px; width: 20px; text-align: center; }
+
+  .kline-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .kline-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
+  .kline-header h3 { font-size: 15px; color: var(--blue); }
+  .tf-tabs { display: flex; gap: 4px; }
+  .tf-tab {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text2);
+    padding: 3px 10px; border-radius: 4px; cursor: pointer; font-size: 12px;
+  }
+  .tf-tab:hover { border-color: var(--blue); color: var(--text); }
+  .tf-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .kline-canvas-wrap { position: relative; }
+  .kline-canvas-wrap canvas { width: 100% !important; }
+  #c-kline { height: 320px !important; }
+  #c-kline-overlay { height: 320px !important; position: absolute; top: 0; left: 0; pointer-events: none; }
+  #c-rsi { height: 120px !important; }
+  .kline-hover-area { position: relative; cursor: crosshair; }
+  .kline-ohlc { font-size: 12px; color: var(--text2); min-height: 18px; margin-bottom: 2px; line-height: 1.6; }
+  .kline-ohlc span { margin-right: 10px; white-space: nowrap; }
+  .rsi-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
+
+  .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
+  .chart-card {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; overflow: hidden;
+  }
+  .chart-card h3 { font-size: 14px; margin-bottom: 12px; color: var(--text2); }
+  .chart-card canvas { width: 100% !important; height: 220px !important; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 6px 8px; color: var(--text2); font-weight: 500; border-bottom: 1px solid var(--border); }
+  td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
+  .up { color: var(--green); } .down { color: var(--red); } .neutral { color: var(--yellow); }
+
+  .alert-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .alert-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  .alert-header h3 { font-size: 15px; color: var(--blue); }
+  .alert-form { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; margin-bottom: 12px; }
+  .alert-form select, .alert-form input {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 10px; border-radius: 6px; font-size: 13px;
+  }
+  .alert-form input { width: 100px; }
+  .alert-form button {
+    background: var(--green); color: #fff; border: none; padding: 5px 14px;
+    border-radius: 6px; cursor: pointer; font-size: 13px;
+  }
+  .alert-list { max-height: 200px; overflow-y: auto; }
+  .alert-item {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 6px 8px; border-bottom: 1px solid var(--border); font-size: 13px;
+  }
+  .alert-item:last-child { border-bottom: none; }
+  .alert-item .desc { flex: 1; }
+  .alert-item .triggered { color: var(--green); font-weight: 600; margin-right: 8px; }
+  .alert-item .del-btn {
+    background: none; border: none; color: var(--red); cursor: pointer;
+    font-size: 14px; padding: 2px 6px;
+  }
+  .alert-toast {
+    position: fixed; top: 20px; right: 20px; z-index: 999;
+    background: var(--card); border: 2px solid var(--green); border-radius: 10px;
+    padding: 14px 20px; color: var(--text); font-size: 14px;
+    box-shadow: 0 4px 20px rgba(0,0,0,0.5); animation: slideIn 0.3s ease;
+    display: none; max-width: 360px;
+  }
+  .alert-toast.show { display: block; }
+  .alert-toast .toast-title { font-weight: 700; margin-bottom: 4px; color: var(--green); }
+  @keyframes slideIn { from { transform: translateX(100px); opacity: 0; } to { transform: translateX(0); opacity: 1; } }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+    <h1 id="title">聪明钱监控面板</h1>
+    <div class="coin-tabs" id="coinTabs"></div>
+    <span class="add-coin-wrap">
+      <input class="add-coin-input" id="addCoinInput" placeholder="如 AVAX" onkeydown="if(event.key==='Enter')addCoin()">
+      <button class="add-coin-btn" onclick="addCoin()">+</button>
+    </span>
+    <button class="edit-toggle" id="editToggle" onclick="toggleEdit()">编辑</button>
+  </div>
+  <div class="controls">
+    <input id="symbolInput" value="SLXUSDT" placeholder="交易对" style="width:120px">
+    <select id="intervalSelect">
+      <option value="30">30s</option>
+      <option value="60" selected>60s</option>
+      <option value="120">2min</option>
+      <option value="300">5min</option>
+    </select>
+    <button onclick="changeSymbol()">切换</button>
+    <span class="status"><span class="dot live"></span><span id="countdown"></span></span>
+  </div>
+</div>
+
+<div class="overview" id="overview"></div>
+<div class="signals" id="signals"></div>
+
+<div class="alert-section">
+  <div class="alert-header">
+    <h3>报警设置</h3>
+    <span style="display:flex;gap:12px;">
+      <label style="font-size:12px;color:var(--text2);cursor:pointer;">
+        <input type="checkbox" id="alertSound" checked style="margin-right:4px;">声音
+      </label>
+      <label style="font-size:12px;color:var(--text2);cursor:pointer;">
+        <input type="checkbox" id="alertFeishu" checked style="margin-right:4px;">飞书推送
+      </label>
+    </span>
+  </div>
+  <div class="alert-form">
+    <select id="alertType">
+      <option value="price_above">价格 ></option>
+      <option value="price_below">价格 <</option>
+      <option value="rsi_above">RSI6 ></option>
+      <option value="rsi_below">RSI6 <</option>
+      <option value="top_long">大户翻多 (比值>1)</option>
+      <option value="top_short">大户翻空 (比值<1)</option>
+      <option value="buy_surge">主动买入激增 (>1.2)</option>
+      <option value="sell_surge">主动卖出激增 (<0.8)</option>
+    </select>
+    <input id="alertValue" type="number" step="any" placeholder="阈值">
+    <button onclick="addAlert()">添加报警</button>
+  </div>
+  <div class="alert-list" id="alertList"></div>
+</div>
+
+<div id="alertToast" class="alert-toast">
+  <div class="toast-title" id="toastTitle"></div>
+  <div id="toastBody"></div>
+</div>
+
+<div class="kline-section">
+  <div class="kline-header">
+    <h3>价格走势 & RSI</h3>
+    <div class="tf-tabs" id="tfTabs"></div>
+  </div>
+  <div class="kline-canvas-wrap">
+    <div class="kline-ohlc" id="klineOHLC"></div>
+    <div class="kline-hover-area" id="klineHoverArea">
+      <canvas id="c-kline"></canvas>
+      <canvas id="c-kline-overlay"></canvas>
+    </div>
+    <div class="rsi-label">RSI(6, 12, 24)</div>
+    <canvas id="c-rsi"></canvas>
+  </div>
+</div>
+
+<div class="charts-grid" id="charts"></div>
+
+<script>
+const urlParams = new URLSearchParams(window.location.search);
+let symbol = urlParams.get('symbol')?.toUpperCase() || 'SLXUSDT';
+let interval = parseInt(urlParams.get('interval') || '60', 10);
+let timer = null;
+let remaining = 0;
+
+const defaultCoins = [
+  { symbol: 'SLXUSDT', label: 'SLX' },
+  { symbol: 'BTCUSDT', label: 'BTC' },
+  { symbol: 'ETHUSDT', label: 'ETH' },
+  { symbol: 'BNBUSDT', label: 'BNB' },
+  { symbol: 'SOLUSDT', label: 'SOL' },
+  { symbol: 'DOGEUSDT', label: 'DOGE' },
+  { symbol: 'XRPUSDT', label: 'XRP' },
+  { symbol: 'PEPEUSDT', label: 'PEPE' },
+];
+
+function loadCoins() {
+  try {
+    const saved = localStorage.getItem('smart-money-coins');
+    if (saved) return JSON.parse(saved);
+  } catch {}
+  return [...defaultCoins];
+}
+function saveCoins() { localStorage.setItem('smart-money-coins', JSON.stringify(presetCoins)); }
+let presetCoins = loadCoins();
+let editing = false;
+
+const timeframes = [
+  { value: '5m', label: '5分钟' },
+  { value: '1h', label: '1小时' },
+  { value: '4h', label: '4小时' },
+  { value: '1d', label: '1天' },
+];
+let currentTF = '1h';
+let lastKlines = null;
+
+// Alert system
+function loadAlerts() {
+  try { return JSON.parse(localStorage.getItem('smart-money-alerts') || '[]'); } catch { return []; }
+}
+function saveAlerts() { localStorage.setItem('smart-money-alerts', JSON.stringify(alerts)); }
+let alerts = loadAlerts();
+let alertIdCounter = alerts.reduce((max, a) => Math.max(max, a.id || 0), 0) + 1;
+
+const ALERT_LABELS = {
+  price_above: '价格 >',  price_below: '价格 <',
+  rsi_above: 'RSI6 >',    rsi_below: 'RSI6 <',
+  top_long: '大户翻多',   top_short: '大户翻空',
+  buy_surge: '买入激增',  sell_surge: '卖出激增',
+};
+const NO_VALUE_TYPES = ['top_long', 'top_short', 'buy_surge', 'sell_surge'];
+
+function addAlert() {
+  const type = document.getElementById('alertType').value;
+  const value = parseFloat(document.getElementById('alertValue').value);
+  if (!NO_VALUE_TYPES.includes(type) && isNaN(value)) return;
+  alerts.push({
+    id: alertIdCounter++, type, value: NO_VALUE_TYPES.includes(type) ? null : value,
+    symbol, triggered: false, createdAt: Date.now(),
+  });
+  saveAlerts();
+  document.getElementById('alertValue').value = '';
+  renderAlerts();
+}
+
+function removeAlert(id) {
+  alerts = alerts.filter(a => a.id !== id);
+  saveAlerts();
+  renderAlerts();
+}
+
+function renderAlerts() {
+  const el = document.getElementById('alertList');
+  if (!alerts.length) { el.innerHTML = '<div style="color:var(--text2);font-size:12px;padding:6px 0;">暂无报警</div>'; return; }
+  el.innerHTML = alerts.map(a => {
+    const label = ALERT_LABELS[a.type] || a.type;
+    const valStr = a.value !== null ? ` ${a.value}` : '';
+    return `<div class="alert-item">
+      <span class="desc">[${a.symbol}] ${label}${valStr}</span>
+      ${a.triggered ? '<span class="triggered">已触发</span>' : ''}
+      <button class="del-btn" onclick="removeAlert(${a.id})">✕</button>
+    </div>`;
+  }).join('');
+}
+
+function playAlertSound() {
+  if (!document.getElementById('alertSound').checked) return;
+  try {
+    const actx = new (window.AudioContext || window.webkitAudioContext)();
+    const osc = actx.createOscillator();
+    const gain = actx.createGain();
+    osc.connect(gain); gain.connect(actx.destination);
+    osc.frequency.value = 880;
+    gain.gain.setValueAtTime(0.3, actx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.01, actx.currentTime + 0.5);
+    osc.start(); osc.stop(actx.currentTime + 0.5);
+  } catch {}
+}
+
+async function sendToFeishu(title, body) {
+  if (!document.getElementById('alertFeishu').checked) return;
+  try {
+    await fetch('/api/feishu-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title, content: body }),
+    });
+  } catch (e) { console.error('Feishu send error:', e); }
+}
+
+function showToast(title, body) {
+  const toast = document.getElementById('alertToast');
+  document.getElementById('toastTitle').textContent = title;
+  document.getElementById('toastBody').textContent = body;
+  toast.classList.add('show');
+  playAlertSound();
+  if ('Notification' in window && Notification.permission === 'granted') {
+    new Notification(title, { body, icon: '📊' });
+  }
+  sendToFeishu(title, body);
+  setTimeout(() => toast.classList.remove('show'), 6000);
+}
+
+function checkAlerts(data) {
+  const price = parseFloat(data.price.price);
+  const topPos = data.topPositions[data.topPositions.length - 1];
+  const posRatio = parseFloat(topPos.longShortRatio);
+  const taker = data.takerVol[data.takerVol.length - 1];
+  const bsRatio = parseFloat(taker.buySellRatio);
+
+  alerts.forEach(a => {
+    if (a.triggered || a.symbol !== symbol) return;
+    let fire = false, msg = '';
+    switch (a.type) {
+      case 'price_above': fire = price > a.value; msg = `价格 ${price.toFixed(4)} 突破 ${a.value}`; break;
+      case 'price_below': fire = price < a.value; msg = `价格 ${price.toFixed(4)} 跌破 ${a.value}`; break;
+      case 'top_long': fire = posRatio > 1; msg = `大户持仓翻多 (比值 ${posRatio.toFixed(4)})`; break;
+      case 'top_short': fire = posRatio < 1; msg = `大户持仓翻空 (比值 ${posRatio.toFixed(4)})`; break;
+      case 'buy_surge': fire = bsRatio > 1.2; msg = `主动买入激增 (买卖比 ${bsRatio.toFixed(4)})`; break;
+      case 'sell_surge': fire = bsRatio < 0.8; msg = `主动卖出激增 (买卖比 ${bsRatio.toFixed(4)})`; break;
+    }
+    if (fire) {
+      a.triggered = true;
+      saveAlerts();
+      renderAlerts();
+      showToast(`${a.symbol} 报警触发`, msg);
+    }
+  });
+}
+
+// RSI alerts check separately after kline fetch
+function checkRSIAlerts(rsi6) {
+  const lastRSI = rsi6.filter(v => v !== null).pop();
+  if (!lastRSI) return;
+  alerts.forEach(a => {
+    if (a.triggered || a.symbol !== symbol) return;
+    let fire = false, msg = '';
+    if (a.type === 'rsi_above' && lastRSI > a.value) {
+      fire = true; msg = `RSI6 = ${lastRSI.toFixed(1)} 超过 ${a.value}`;
+    }
+    if (a.type === 'rsi_below' && lastRSI < a.value) {
+      fire = true; msg = `RSI6 = ${lastRSI.toFixed(1)} 低于 ${a.value}`;
+    }
+    if (fire) {
+      a.triggered = true; saveAlerts(); renderAlerts();
+      showToast(`${a.symbol} 报警触发`, msg);
+    }
+  });
+}
+
+function formatNum(n) {
+  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  return n.toFixed(0);
+}
+function formatUSDT(n) {
+  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
+  if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  return '$' + n.toFixed(2);
+}
+function ts2time(ts) {
+  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
+}
+function ratioClass(r) {
+  r = parseFloat(r);
+  if (r >= 1.0) return 'up';
+  if (r >= 0.9) return 'neutral';
+  return 'down';
+}
+
+function renderOverview(data) {
+  const price = parseFloat(data.price.price);
+  const fr = parseFloat(data.fundingRate.lastFundingRate);
+  const oiVal = parseFloat(data.oi.openInterest);
+  const latestPos = data.topPositions[data.topPositions.length - 1];
+  const posRatio = parseFloat(latestPos.longShortRatio);
+
+  document.getElementById('overview').innerHTML = `
+    <div class="stat-card">
+      <div class="label">当前价格</div>
+      <div class="value">$${price.toFixed(4)}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">大户持仓多空比</div>
+      <div class="value ${ratioClass(posRatio)}">${posRatio.toFixed(4)}</div>
+      <div class="sub">${posRatio >= 1 ? '偏多' : '偏空'}</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">资金费率</div>
+      <div class="value ${fr >= 0 ? 'up' : 'down'}">${(fr * 100).toFixed(4)}%</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">持仓量</div>
+      <div class="value">${formatNum(oiVal)}</div>
+      <div class="sub">${formatUSDT(oiVal * price)}</div>
+    </div>
+  `;
+}
+
+function renderSignals(data) {
+  const latestPos = data.topPositions[data.topPositions.length - 1];
+  const latestGlobal = data.globalRatio[data.globalRatio.length - 1];
+  const latestTaker = data.takerVol[data.takerVol.length - 1];
+  const fr = parseFloat(data.fundingRate.lastFundingRate);
+  const posR = parseFloat(latestPos.longShortRatio);
+  const gR = parseFloat(latestGlobal.longShortRatio);
+  const bsR = parseFloat(latestTaker.buySellRatio);
+
+  let items = [];
+  items.push(posR > 1 
+    ? `<div class="signal-item"><span class="signal-icon up">✓</span>大户持仓偏多 (${posR.toFixed(4)})</div>`
+    : `<div class="signal-item"><span class="signal-icon down">✗</span>大户持仓偏空 (${posR.toFixed(4)})</div>`);
+  items.push(gR > 1
+    ? `<div class="signal-item"><span class="signal-icon up">✓</span>全网偏多 (${gR.toFixed(4)})</div>`
+    : `<div class="signal-item"><span class="signal-icon down">✗</span>全网偏空 (${gR.toFixed(4)})</div>`);
+  if (posR > 1 && gR < 1) {
+    items.push(`<div class="signal-item"><span class="signal-icon neutral">⚡</span><strong class="neutral">大户多 + 散户空 = 聪明钱抄底信号</strong></div>`);
+  }
+  if (bsR > 1.1) items.push(`<div class="signal-item"><span class="signal-icon up">✓</span>强力主动买入 (${bsR.toFixed(4)})</div>`);
+  else if (bsR < 0.9) items.push(`<div class="signal-item"><span class="signal-icon down">✗</span>强力主动卖出 (${bsR.toFixed(4)})</div>`);
+  else items.push(`<div class="signal-item"><span class="signal-icon neutral">─</span>买卖均衡 (${bsR.toFixed(4)})</div>`);
+
+  if (fr > 0.001) items.push(`<div class="signal-item"><span class="signal-icon down">⚠</span>资金费率偏高 (${(fr*100).toFixed(4)}%) - 多头拥挤</div>`);
+  else if (fr < -0.001) items.push(`<div class="signal-item"><span class="signal-icon up">✓</span>资金费率为负 (${(fr*100).toFixed(4)}%) - 空头付费</div>`);
+  else items.push(`<div class="signal-item"><span class="signal-icon neutral">─</span>资金费率中性 (${(fr*100).toFixed(4)}%)</div>`);
+
+  document.getElementById('signals').innerHTML = `<h3>信号摘要</h3>${items.join('')}`;
+}
+
+function drawLineChart(canvas, labels, datasets) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 10, right: 12, bottom: 28, left: 48 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  let allVals = datasets.flatMap(d => d.data);
+  let min = Math.min(...allVals), max = Math.max(...allVals);
+  const range = max - min || 1;
+  min -= range * 0.05; max += range * 0.05;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText((max - (max - min) * (i / 4)).toFixed(4), pad.left - 4, y + 3);
+  }
+
+  // reference line at 1.0 if in range
+  if (min < 1 && max > 1) {
+    const y1 = pad.top + ch * (1 - (1 - min) / (max - min));
+    ctx.strokeStyle = '#484f58'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y1); ctx.lineTo(W - pad.right, y1); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif';
+    ctx.fillText('1.0', pad.left - 4, y1 + 3);
+  }
+
+  // x labels
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(labels.length / 6));
+  for (let i = 0; i < labels.length; i += step) {
+    const x = pad.left + (cw / (labels.length - 1)) * i;
+    ctx.fillText(labels[i], x, H - 6);
+  }
+
+  // lines
+  const colors = ['#58a6ff', '#3fb950', '#f85149', '#d29922'];
+  datasets.forEach((ds, di) => {
+    ctx.strokeStyle = colors[di % colors.length]; ctx.lineWidth = 2;
+    ctx.beginPath();
+    ds.data.forEach((v, i) => {
+      const x = pad.left + (cw / (ds.data.length - 1)) * i;
+      const y = pad.top + ch * (1 - (v - min) / (max - min));
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // dot on last point
+    const lastX = pad.left + cw;
+    const lastY = pad.top + ch * (1 - (ds.data[ds.data.length - 1] - min) / (max - min));
+    ctx.fillStyle = colors[di % colors.length];
+    ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2); ctx.fill();
+  });
+
+  // legend
+  if (datasets.length > 1) {
+    ctx.font = '11px sans-serif';
+    let lx = pad.left + 4;
+    datasets.forEach((ds, di) => {
+      ctx.fillStyle = colors[di % colors.length];
+      ctx.fillRect(lx, pad.top + 2, 12, 3);
+      ctx.fillStyle = '#e6edf3';
+      ctx.textAlign = 'left';
+      ctx.fillText(ds.label, lx + 16, pad.top + 8);
+      lx += ctx.measureText(ds.label).width + 32;
+    });
+  }
+}
+
+function drawBarChart(canvas, labels, buyData, sellData) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 10, right: 12, bottom: 28, left: 48 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  const allVals = [...buyData, ...sellData];
+  const max = Math.max(...allVals) * 1.1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const barW = (cw / labels.length) * 0.35;
+  const gap = cw / labels.length;
+
+  // grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(formatNum(max - (max / 4) * i), pad.left - 4, y + 3);
+  }
+
+  labels.forEach((l, i) => {
+    const cx = pad.left + gap * i + gap / 2;
+    const bh = (buyData[i] / max) * ch;
+    const sh = (sellData[i] / max) * ch;
+    ctx.fillStyle = '#3fb95080';
+    ctx.fillRect(cx - barW - 1, pad.top + ch - bh, barW, bh);
+    ctx.fillStyle = '#f8514980';
+    ctx.fillRect(cx + 1, pad.top + ch - sh, barW, sh);
+
+    if (i % Math.max(1, Math.floor(labels.length / 6)) === 0) {
+      ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText(l, cx, H - 6);
+    }
+  });
+
+  // legend
+  ctx.font = '11px sans-serif';
+  ctx.fillStyle = '#3fb950'; ctx.fillRect(pad.left + 4, pad.top + 2, 12, 3);
+  ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'left'; ctx.fillText('买入', pad.left + 20, pad.top + 8);
+  ctx.fillStyle = '#f85149'; ctx.fillRect(pad.left + 56, pad.top + 2, 12, 3);
+  ctx.fillStyle = '#e6edf3'; ctx.fillText('卖出', pad.left + 72, pad.top + 8);
+}
+
+function calcRSI(closes, period = 14) {
+  const rsi = new Array(closes.length).fill(null);
+  if (closes.length < period + 1) return rsi;
+  let gainSum = 0, lossSum = 0;
+  for (let i = 1; i <= period; i++) {
+    const d = closes[i] - closes[i - 1];
+    if (d > 0) gainSum += d; else lossSum -= d;
+  }
+  let avgGain = gainSum / period, avgLoss = lossSum / period;
+  rsi[period] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  for (let i = period + 1; i < closes.length; i++) {
+    const d = closes[i] - closes[i - 1];
+    avgGain = (avgGain * (period - 1) + Math.max(d, 0)) / period;
+    avgLoss = (avgLoss * (period - 1) + Math.max(-d, 0)) / period;
+    rsi[i] = avgLoss === 0 ? 100 : 100 - 100 / (1 + avgGain / avgLoss);
+  }
+  return rsi;
+}
+
+function ts2klineLabel(ts, tf) {
+  const d = new Date(ts);
+  if (tf === '1d') return `${d.getMonth()+1}/${d.getDate()}`;
+  if (tf === '4h') return `${d.getMonth()+1}/${d.getDate()} ${String(d.getHours()).padStart(2,'0')}:00`;
+  return `${String(d.getHours()).padStart(2,'0')}:${String(d.getMinutes()).padStart(2,'0')}`;
+}
+
+function calcMA(closes, period) {
+  const ma = new Array(closes.length).fill(null);
+  for (let i = period - 1; i < closes.length; i++) {
+    let sum = 0;
+    for (let j = i - period + 1; j <= i; j++) sum += closes[j];
+    ma[i] = sum / period;
+  }
+  return ma;
+}
+
+function drawCandlestick(canvas, klines, tf) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 12, right: 60, bottom: 28, left: 10 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  const highs = klines.map(k => k.high);
+  const lows = klines.map(k => k.low);
+  let pMin = Math.min(...lows), pMax = Math.max(...highs);
+  const pRange = pMax - pMin || 1;
+  pMin -= pRange * 0.02; pMax += pRange * 0.02;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const candleW = Math.max(2, (cw / klines.length) * 0.65);
+  const gap = cw / klines.length;
+
+  const priceToY = (p) => pad.top + ch * (1 - (p - pMin) / (pMax - pMin));
+
+  // grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  for (let i = 0; i <= 5; i++) {
+    const price = pMin + (pMax - pMin) * (1 - i / 5);
+    const y = pad.top + (ch / 5) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const decimals = price < 1 ? 6 : price < 100 ? 4 : 2;
+    ctx.fillText(price.toFixed(decimals), W - pad.right + 4, y + 3);
+  }
+
+  // x labels
+  ctx.fillStyle = '#8b949e'; ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(klines.length / 8));
+  for (let i = 0; i < klines.length; i += labelStep) {
+    const x = pad.left + gap * i + gap / 2;
+    ctx.fillText(ts2klineLabel(klines[i].openTime, tf), x, H - 6);
+  }
+
+  // volume bars (rendered first so candles draw on top)
+  const volumes = klines.map(k => k.volume);
+  const maxVol = Math.max(...volumes);
+  const volHeight = ch * 0.2;
+  klines.forEach((k, i) => {
+    const cx = pad.left + gap * i + gap / 2;
+    const isUp = k.close >= k.open;
+    const vh = (k.volume / maxVol) * volHeight;
+    ctx.fillStyle = isUp ? '#3fb95030' : '#f8514930';
+    ctx.fillRect(cx - candleW / 2, pad.top + ch - vh, candleW, vh);
+  });
+
+  // candles
+  klines.forEach((k, i) => {
+    const cx = pad.left + gap * i + gap / 2;
+    const isUp = k.close >= k.open;
+    const color = isUp ? '#3fb950' : '#f85149';
+
+    // wick
+    ctx.strokeStyle = color; ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx, priceToY(k.high));
+    ctx.lineTo(cx, priceToY(k.low));
+    ctx.stroke();
+
+    // body
+    const bodyTop = priceToY(Math.max(k.open, k.close));
+    const bodyBot = priceToY(Math.min(k.open, k.close));
+    const bodyH = Math.max(1, bodyBot - bodyTop);
+    if (isUp) {
+      ctx.strokeStyle = color; ctx.lineWidth = 1;
+      ctx.strokeRect(cx - candleW / 2, bodyTop, candleW, bodyH);
+    } else {
+      ctx.fillStyle = color;
+      ctx.fillRect(cx - candleW / 2, bodyTop, candleW, bodyH);
+    }
+  });
+
+  // MA lines
+  const closes = klines.map(k => k.close);
+  const maConfigs = [
+    { period: 5, color: '#d29922', label: 'MA5' },
+    { period: 20, color: '#58a6ff', label: 'MA20' },
+    { period: 60, color: '#bc8cff', label: 'MA60' },
+  ];
+  maConfigs.forEach(({ period, color, label }) => {
+    if (klines.length < period) return;
+    const ma = calcMA(closes, period);
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    let started = false;
+    ma.forEach((v, i) => {
+      if (v === null) return;
+      const x = pad.left + gap * i + gap / 2;
+      const y = priceToY(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+  });
+
+  // MA legend
+  ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  let legendX = pad.left + 4;
+  maConfigs.forEach(({ period, color, label }) => {
+    if (klines.length < period) return;
+    const ma = calcMA(closes, period);
+    const lastVal = ma.filter(v => v !== null).pop();
+    if (!lastVal) return;
+    const dec = lastVal < 1 ? 6 : lastVal < 100 ? 4 : 2;
+    ctx.fillStyle = color;
+    ctx.fillRect(legendX, pad.top + 2, 10, 3);
+    ctx.fillText(`${label}: ${lastVal.toFixed(dec)}`, legendX + 14, pad.top + 8);
+    legendX += ctx.measureText(`${label}: ${lastVal.toFixed(dec)}`).width + 24;
+  });
+
+  // latest price line
+  const lastPrice = klines[klines.length - 1].close;
+  const lastY = priceToY(lastPrice);
+  const lastColor = klines[klines.length - 1].close >= klines[klines.length - 1].open ? '#3fb950' : '#f85149';
+  ctx.strokeStyle = lastColor; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.left, lastY); ctx.lineTo(W - pad.right, lastY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = lastColor;
+  const decimals = lastPrice < 1 ? 6 : lastPrice < 100 ? 4 : 2;
+  ctx.fillRect(W - pad.right, lastY - 8, 56, 16);
+  ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText(lastPrice.toFixed(decimals), W - pad.right + 4, lastY + 3);
+}
+
+function drawRSIChart(canvas, rsiLines, klines, tf) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 8, right: 60, bottom: 28, left: 10 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+  const dataLen = klines.length;
+  const gap = cw / dataLen;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const yToCanvas = (v) => pad.top + ch * (1 - v / 100);
+
+  // overbought / oversold zones
+  ctx.fillStyle = '#f8514910';
+  ctx.fillRect(pad.left, yToCanvas(100), cw, yToCanvas(70) - yToCanvas(100));
+  ctx.fillStyle = '#3fb95010';
+  ctx.fillRect(pad.left, yToCanvas(30), cw, yToCanvas(0) - yToCanvas(30));
+
+  // grid lines at 20, 50, 80
+  [20, 50, 80].forEach(v => {
+    const y = yToCanvas(v);
+    ctx.strokeStyle = v === 50 ? '#484f58' : '#30363d';
+    ctx.lineWidth = 1; ctx.setLineDash(v === 50 ? [4, 4] : [2, 4]);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(v.toString(), W - pad.right + 4, y + 3);
+  });
+
+  // x labels
+  ctx.fillStyle = '#8b949e'; ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(dataLen / 8));
+  for (let i = 0; i < dataLen; i += labelStep) {
+    const x = pad.left + gap * i + gap / 2;
+    ctx.fillText(ts2klineLabel(klines[i].openTime, tf), x, H - 6);
+  }
+
+  // draw each RSI line
+  rsiLines.forEach(({ period, color, data }) => {
+    ctx.strokeStyle = color; ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    let started = false;
+    data.forEach((v, i) => {
+      if (v === null) return;
+      const x = pad.left + gap * i + gap / 2;
+      const y = yToCanvas(v);
+      if (!started) { ctx.moveTo(x, y); started = true; }
+      else ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // dot on last point
+    const lastVal = data[data.length - 1];
+    if (lastVal !== null) {
+      const lx = pad.left + gap * (data.length - 1) + gap / 2;
+      const ly = yToCanvas(lastVal);
+      ctx.fillStyle = color;
+      ctx.beginPath(); ctx.arc(lx, ly, 3, 0, Math.PI * 2); ctx.fill();
+    }
+  });
+
+  // legend with current values
+  ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  let legendX = pad.left + 4;
+  rsiLines.forEach(({ period, color, data }) => {
+    const lastVal = data.filter(v => v !== null).pop();
+    if (!lastVal) return;
+    const label = `RSI${period}: ${lastVal.toFixed(1)}`;
+    ctx.fillStyle = color;
+    ctx.fillRect(legendX, pad.top + 1, 10, 3);
+    ctx.fillText(label, legendX + 14, pad.top + 7);
+    legendX += ctx.measureText(label).width + 24;
+  });
+}
+
+async function fetchAndDrawKlines() {
+  try {
+    const res = await fetch(`/api/klines?symbol=${symbol}&interval=${currentTF}&limit=100`);
+    const raw = await res.json();
+    if (raw.error) return;
+    const klines = raw.map(k => ({
+      openTime: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]),
+      low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]),
+    }));
+    const closes = klines.map(k => k.close);
+    const rsiLines = [
+      { period: 6, color: '#d29922', data: calcRSI(closes, 6) },
+      { period: 12, color: '#58a6ff', data: calcRSI(closes, 12) },
+      { period: 24, color: '#bc8cff', data: calcRSI(closes, 24) },
+    ];
+
+    lastKlines = klines;
+    checkRSIAlerts(rsiLines[0].data);
+    requestAnimationFrame(() => {
+      drawCandlestick(document.getElementById('c-kline'), klines, currentTF);
+      drawRSIChart(document.getElementById('c-rsi'), rsiLines, klines, currentTF);
+      setupOverlay();
+    });
+  } catch (e) {
+    console.error('Kline fetch error:', e);
+  }
+}
+
+function renderTFTabs() {
+  document.getElementById('tfTabs').innerHTML = timeframes.map(t =>
+    `<span class="tf-tab ${t.value === currentTF ? 'active' : ''}" onclick="switchTF('${t.value}')">${t.label}</span>`
+  ).join('');
+}
+function switchTF(tf) {
+  currentTF = tf;
+  renderTFTabs();
+  fetchAndDrawKlines();
+}
+
+function renderCharts(data) {
+  const chartsEl = document.getElementById('charts');
+  chartsEl.innerHTML = `
+    <div class="chart-card">
+      <h3>大户持仓多空比 (Top 20% 持仓维度) - 核心指标</h3>
+      <canvas id="c-top-pos"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>大户 vs 全网 多空比 (账户维度)</h3>
+      <canvas id="c-accounts"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>持仓量 (OI) 变化</h3>
+      <canvas id="c-oi"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>主动买卖量 (5min)</h3>
+      <canvas id="c-taker"></canvas>
+    </div>
+    <div class="chart-card" style="grid-column: 1 / -1;">
+      <h3>详细数据表</h3>
+      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+        <div>
+          <h4 style="font-size:13px;color:var(--text2);margin-bottom:6px;">大户持仓多空比 (1h)</h4>
+          <table>
+            <tr><th>时间</th><th>多头%</th><th>空头%</th><th>比值</th></tr>
+            ${data.topPositions.map(d => `<tr>
+              <td>${ts2time(d.timestamp)}</td>
+              <td>${(d.longAccount * 100).toFixed(1)}%</td>
+              <td>${(d.shortAccount * 100).toFixed(1)}%</td>
+              <td class="${ratioClass(d.longShortRatio)}">${parseFloat(d.longShortRatio).toFixed(4)}</td>
+            </tr>`).join('')}
+          </table>
+        </div>
+        <div>
+          <h4 style="font-size:13px;color:var(--text2);margin-bottom:6px;">主动买卖量 (5min)</h4>
+          <table>
+            <tr><th>时间</th><th>买入</th><th>卖出</th><th>买卖比</th></tr>
+            ${data.takerVol.map(d => `<tr>
+              <td>${ts2time(d.timestamp)}</td>
+              <td class="up">${formatNum(parseFloat(d.buyVol))}</td>
+              <td class="down">${formatNum(parseFloat(d.sellVol))}</td>
+              <td class="${parseFloat(d.buySellRatio) >= 1.1 ? 'up' : parseFloat(d.buySellRatio) <= 0.9 ? 'down' : 'neutral'}">${parseFloat(d.buySellRatio).toFixed(4)}</td>
+            </tr>`).join('')}
+          </table>
+        </div>
+      </div>
+    </div>
+  `;
+
+  requestAnimationFrame(() => {
+    // Top positions chart
+    drawLineChart(
+      document.getElementById('c-top-pos'),
+      data.topPositions.map(d => ts2time(d.timestamp)),
+      [{ label: '多空比', data: data.topPositions.map(d => parseFloat(d.longShortRatio)) }]
+    );
+
+    // Accounts comparison
+    drawLineChart(
+      document.getElementById('c-accounts'),
+      data.topAccounts.map(d => ts2time(d.timestamp)),
+      [
+        { label: '大户', data: data.topAccounts.map(d => parseFloat(d.longShortRatio)) },
+        { label: '全网', data: data.globalRatio.map(d => parseFloat(d.longShortRatio)) },
+      ]
+    );
+
+    // OI chart
+    drawLineChart(
+      document.getElementById('c-oi'),
+      data.oiHist.map(d => ts2time(d.timestamp)),
+      [{ label: 'OI (USDT)', data: data.oiHist.map(d => parseFloat(d.sumOpenInterestValue)) }]
+    );
+
+    // Taker volume bar chart
+    drawBarChart(
+      document.getElementById('c-taker'),
+      data.takerVol.map(d => ts2time(d.timestamp)),
+      data.takerVol.map(d => parseFloat(d.buyVol)),
+      data.takerVol.map(d => parseFloat(d.sellVol)),
+    );
+  });
+}
+
+async function fetchData() {
+  try {
+    const res = await fetch(`/api/data?symbol=${symbol}`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    document.getElementById('title').textContent = `${symbol} 聪明钱监控面板`;
+    renderOverview(data);
+    renderSignals(data);
+    renderCharts(data);
+    checkAlerts(data);
+    fetchAndDrawKlines();
+  } catch (e) {
+    console.error('Fetch error:', e);
+  }
+}
+
+function startCountdown() {
+  remaining = interval;
+  if (timer) clearInterval(timer);
+  timer = setInterval(() => {
+    remaining--;
+    document.getElementById('countdown').textContent = `${remaining}s 后刷新`;
+    if (remaining <= 0) {
+      remaining = interval;
+      fetchData();
+    }
+  }, 1000);
+}
+
+function changeSymbol(newSymbol) {
+  if (newSymbol) {
+    symbol = newSymbol;
+    document.getElementById('symbolInput').value = symbol;
+  } else {
+    symbol = document.getElementById('symbolInput').value.toUpperCase().trim();
+  }
+  interval = parseInt(document.getElementById('intervalSelect').value, 10);
+  const url = new URL(window.location);
+  url.searchParams.set('symbol', symbol);
+  url.searchParams.set('interval', interval);
+  history.replaceState(null, '', url);
+  renderCoinTabs();
+  fetchData();
+  startCountdown();
+}
+
+function renderCoinTabs() {
+  const el = document.getElementById('coinTabs');
+  el.className = 'coin-tabs' + (editing ? ' editing' : '');
+  el.innerHTML = presetCoins.map(c =>
+    `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="changeSymbol('${c.symbol}')">` +
+    `${c.label}<span class="remove-btn" onclick="event.stopPropagation();removeCoin('${c.symbol}')">✕</span></span>`
+  ).join('');
+}
+
+function toggleEdit() {
+  editing = !editing;
+  document.getElementById('editToggle').textContent = editing ? '完成' : '编辑';
+  renderCoinTabs();
+}
+
+function addCoin() {
+  const input = document.getElementById('addCoinInput');
+  let val = input.value.toUpperCase().trim();
+  if (!val) return;
+  if (!val.endsWith('USDT')) val += 'USDT';
+  const label = val.replace('USDT', '');
+  if (presetCoins.some(c => c.symbol === val)) { input.value = ''; return; }
+  presetCoins.push({ symbol: val, label });
+  saveCoins();
+  input.value = '';
+  renderCoinTabs();
+}
+
+function removeCoin(sym) {
+  presetCoins = presetCoins.filter(c => c.symbol !== sym);
+  saveCoins();
+  renderCoinTabs();
+}
+
+function setupOverlay() {
+  const hoverArea = document.getElementById('klineHoverArea');
+  const overlay = document.getElementById('c-kline-overlay');
+  const klineCanvas = document.getElementById('c-kline');
+
+  const dpr = window.devicePixelRatio || 1;
+  const rect = klineCanvas.getBoundingClientRect();
+  overlay.width = rect.width * dpr;
+  overlay.height = rect.height * dpr;
+  overlay.style.width = rect.width + 'px';
+  overlay.style.height = rect.height + 'px';
+
+  hoverArea.onmousemove = (e) => {
+    if (!lastKlines || !lastKlines.length) return;
+    const br = klineCanvas.getBoundingClientRect();
+    const mx = e.clientX - br.left;
+    const my = e.clientY - br.top;
+    const W = br.width, H = br.height;
+    const pad = { top: 12, right: 60, bottom: 28, left: 10 };
+    const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+    const gap = cw / lastKlines.length;
+
+    if (mx < pad.left || mx > W - pad.right || my < pad.top || my > pad.top + ch) {
+      clearOverlay(); return;
+    }
+
+    const idx = Math.min(lastKlines.length - 1, Math.max(0, Math.floor((mx - pad.left) / gap)));
+    const k = lastKlines[idx];
+    const cx = pad.left + gap * idx + gap / 2;
+
+    const highs = lastKlines.map(k => k.high);
+    const lows = lastKlines.map(k => k.low);
+    let pMin = Math.min(...lows), pMax = Math.max(...highs);
+    const pRange = pMax - pMin || 1;
+    pMin -= pRange * 0.02; pMax += pRange * 0.02;
+    const price = pMin + (1 - (my - pad.top) / ch) * (pMax - pMin);
+
+    const ctx = overlay.getContext('2d');
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, W, H);
+
+    // vertical line
+    ctx.strokeStyle = '#8b949e80'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(cx, pad.top); ctx.lineTo(cx, pad.top + ch); ctx.stroke();
+    // horizontal line
+    ctx.beginPath(); ctx.moveTo(pad.left, my); ctx.lineTo(W - pad.right, my); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // price label on right
+    const dec = price < 1 ? 6 : price < 100 ? 4 : 2;
+    ctx.fillStyle = '#30363d';
+    ctx.fillRect(W - pad.right, my - 9, 56, 18);
+    ctx.strokeStyle = '#8b949e'; ctx.lineWidth = 0.5;
+    ctx.strokeRect(W - pad.right, my - 9, 56, 18);
+    ctx.fillStyle = '#e6edf3'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(price.toFixed(dec), W - pad.right + 4, my + 3);
+
+    // highlight candle high/low with small ticks
+    const highY = pad.top + ch * (1 - (k.high - pMin) / (pMax - pMin));
+    const lowY = pad.top + ch * (1 - (k.low - pMin) / (pMax - pMin));
+    const closeY = pad.top + ch * (1 - (k.close - pMin) / (pMax - pMin));
+    ctx.fillStyle = '#3fb95090';
+    ctx.font = '9px sans-serif'; ctx.textAlign = 'right';
+    ctx.fillText(k.high.toFixed(dec), cx - 6, highY - 3);
+    ctx.fillStyle = '#f8514990';
+    ctx.fillText(k.low.toFixed(dec), cx - 6, lowY + 10);
+
+    // time label on bottom
+    const timeLabel = ts2klineLabel(k.openTime, currentTF);
+    const tw = ctx.measureText(timeLabel).width + 12;
+    ctx.fillStyle = '#30363d';
+    ctx.fillRect(cx - tw / 2, pad.top + ch + 2, tw, 16);
+    ctx.strokeRect(cx - tw / 2, pad.top + ch + 2, tw, 16);
+    ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'center';
+    ctx.fillText(timeLabel, cx, pad.top + ch + 14);
+
+    // OHLCV + amplitude + change info at top
+    const isUp = k.close >= k.open;
+    const ohlcEl = document.getElementById('klineOHLC');
+    const d = dec;
+    const amplitude = ((k.high - k.low) / k.open * 100).toFixed(2);
+    let changeStr = '', changeColor = 'var(--text2)';
+    if (idx > 0) {
+      const prevClose = lastKlines[idx - 1].close;
+      const change = ((k.close - prevClose) / prevClose * 100);
+      changeColor = change >= 0 ? 'var(--green)' : 'var(--red)';
+      changeStr = `<span>涨跌: <b style="color:${changeColor}">${change >= 0 ? '+' : ''}${change.toFixed(2)}%</b></span>`;
+    }
+    ohlcEl.innerHTML =
+      `<span style="color:var(--text2)">${ts2klineLabel(k.openTime, currentTF)}</span>` +
+      `<span>开: <b style="color:${isUp ? 'var(--green)' : 'var(--red)'}">${k.open.toFixed(d)}</b></span>` +
+      `<span>高: <b style="color:var(--green)">${k.high.toFixed(d)}</b></span>` +
+      `<span>低: <b style="color:var(--red)">${k.low.toFixed(d)}</b></span>` +
+      `<span>收: <b style="color:${isUp ? 'var(--green)' : 'var(--red)'}">${k.close.toFixed(d)}</b></span>` +
+      `<span>振幅: <b>${amplitude}%</b></span>` +
+      changeStr +
+      `<span>量: <b>${formatNum(k.volume)}</b></span>`;
+  };
+
+  hoverArea.onmouseleave = clearOverlay;
+}
+
+function clearOverlay() {
+  const overlay = document.getElementById('c-kline-overlay');
+  const ctx = overlay.getContext('2d');
+  ctx.clearRect(0, 0, overlay.width, overlay.height);
+  document.getElementById('klineOHLC').innerHTML = '';
+}
+
+if ('Notification' in window && Notification.permission === 'default') {
+  Notification.requestPermission();
+}
+renderAlerts();
+document.getElementById('symbolInput').value = symbol;
+const intSelect = document.getElementById('intervalSelect');
+if ([...intSelect.options].some(o => o.value === String(interval))) {
+  intSelect.value = String(interval);
+}
+
+window.addEventListener('resize', () => { fetchData(); });
+renderCoinTabs();
+renderTFTabs();
+fetchData();
+startCountdown();
+</script>
+</body>
+</html>

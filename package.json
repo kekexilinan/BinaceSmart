@@ -1,0 +1,15 @@
+{
+  "name": "binance-smart-money-monitor",
+  "version": "1.0.0",
+  "description": "币安合约聪明钱监控工具",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "dev": "node server.mjs",
+    "monitor": "node smart-money.mjs SLXUSDT 60",
+    "monitor:btc": "node smart-money.mjs BTCUSDT 60",
+    "monitor:eth": "node smart-money.mjs ETHUSDT 60"
+  }
+}
