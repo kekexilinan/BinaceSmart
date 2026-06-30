@@ -286,6 +286,41 @@
     border-top: 1px solid var(--border); font-size: 12px; color: var(--text2);
   }
 
+  .strategy-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .strategy-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .strategy-header h3 { font-size: 15px; color: var(--yellow); margin: 0; }
+  .strategy-toggle { font-size: 12px; color: var(--text2); }
+  .strategy-tabs { display: flex; gap: 6px; margin: 12px 0; }
+  .strat-group { margin-bottom: 12px; }
+  .strat-group-title { font-size: 12px; font-weight: 600; color: var(--yellow); margin-bottom: 6px; padding-left: 4px; border-left: 3px solid var(--yellow); }
+  .strat-condition {
+    display: grid; grid-template-columns: 180px 1fr 80px; gap: 8px; align-items: center;
+    padding: 8px; border: 1px solid var(--border); border-radius: 6px; margin-bottom: 6px;
+    font-size: 12px;
+  }
+  .strat-condition .cond-name { font-weight: 500; }
+  .strat-condition input, .strat-condition select {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 3px 6px; border-radius: 4px; font-size: 12px;
+  }
+  .strat-condition .cond-weight { width: 40px; text-align: center; }
+  .strat-actions { display: flex; gap: 8px; margin-top: 12px; }
+  .strat-actions button {
+    padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; border: none;
+  }
+  .strat-btn-save { background: var(--green); color: #fff; }
+  .strat-btn-reset { background: var(--border); color: var(--text); }
+  .strat-btn-backtest { background: var(--blue); color: #fff; }
+  .backtest-result {
+    margin-top: 12px; padding: 12px; background: var(--bg);
+    border: 1px solid var(--border); border-radius: 8px; font-size: 12px;
+  }
+  .backtest-result .stat { display: inline-block; margin-right: 16px; }
+  .backtest-result .stat .val { font-weight: 600; font-size: 14px; }
+
   .alert-section {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; margin-bottom: 20px;
@@ -385,6 +420,21 @@
   <div class="filter-group" id="chartRangeGroup"></div>
 </div>
 <div class="charts-grid" id="charts"></div>
+
+<div class="strategy-section" id="strategySection">
+  <div class="strategy-header" onclick="toggleStrategyPanel()">
+    <h3>🧠 策略管理</h3>
+    <span class="strategy-toggle" id="strategyToggle">展开</span>
+  </div>
+  <div class="strategy-body" id="strategyBody" style="display:none;">
+    <div class="strategy-tabs">
+      <button class="filter-pill active" id="stratTabEdit" onclick="switchStratTab('edit')">编辑策略</button>
+      <button class="filter-pill" id="stratTabBacktest" onclick="switchStratTab('backtest')">回测</button>
+    </div>
+    <div id="stratEditPanel"></div>
+    <div id="stratBacktestPanel" style="display:none;"></div>
+  </div>
+</div>
 
 <div class="alert-section">
   <div class="alert-header">
@@ -847,7 +897,7 @@ function setupChartHover(canvas, labels, datasets, pad, cw, ch, min, max) {
   canvas.onmouseleave = () => { tooltip.classList.remove('show'); };
 }
 
-function drawBarChart(canvas, labels, buyData, sellData) {
+function drawBarChart(canvas, labels, buyData, sellData, ratioData) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
   const rect = canvas.getBoundingClientRect();
@@ -855,7 +905,7 @@ function drawBarChart(canvas, labels, buyData, sellData) {
   canvas.height = rect.height * dpr;
   ctx.scale(dpr, dpr);
   const W = rect.width, H = rect.height;
-  const pad = { top: 10, right: 12, bottom: 28, left: 48 };
+  const pad = { top: 10, right: ratioData ? 36 : 12, bottom: 28, left: 48 };
   const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
 
   const allVals = [...buyData, ...sellData];
@@ -890,17 +940,58 @@ function drawBarChart(canvas, labels, buyData, sellData) {
     }
   });
 
+  // Buy/sell ratio trend line overlay
+  if (ratioData && ratioData.length > 1) {
+    const ratioMax = Math.max(...ratioData) * 1.05;
+    const ratioMin = Math.min(...ratioData) * 0.95;
+    const ratioRange = ratioMax - ratioMin || 0.1;
+    const toRatioY = v => pad.top + ch - ((v - ratioMin) / ratioRange) * ch;
+
+    // Draw 1.0 baseline
+    const baseY = toRatioY(1.0);
+    if (baseY > pad.top && baseY < pad.top + ch) {
+      ctx.setLineDash([3, 3]);
+      ctx.strokeStyle = 'rgba(255,200,0,0.3)'; ctx.lineWidth = 1;
+      ctx.beginPath(); ctx.moveTo(pad.left, baseY); ctx.lineTo(W - pad.right, baseY); ctx.stroke();
+      ctx.setLineDash([]);
+    }
+
+    // Draw ratio line
+    ctx.beginPath();
+    ctx.strokeStyle = 'rgba(255,200,0,0.55)'; ctx.lineWidth = 1.5;
+    ratioData.forEach((v, i) => {
+      const x = pad.left + gap * i + gap / 2;
+      const y = toRatioY(v);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    // Right axis labels for ratio
+    ctx.fillStyle = 'rgba(255,200,0,0.6)'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+    ctx.fillText(ratioMax.toFixed(2), W - pad.right + 3, pad.top + 8);
+    ctx.fillText(ratioMin.toFixed(2), W - pad.right + 3, pad.top + ch);
+    if (baseY > pad.top + 10 && baseY < pad.top + ch - 10) {
+      ctx.fillText('1.00', W - pad.right + 3, baseY + 3);
+    }
+  }
+
   // legend
   ctx.font = '11px sans-serif';
   ctx.fillStyle = '#3fb950'; ctx.fillRect(pad.left + 4, pad.top + 2, 12, 3);
   ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'left'; ctx.fillText('买入', pad.left + 20, pad.top + 8);
   ctx.fillStyle = '#f85149'; ctx.fillRect(pad.left + 56, pad.top + 2, 12, 3);
   ctx.fillStyle = '#e6edf3'; ctx.fillText('卖出', pad.left + 72, pad.top + 8);
+  if (ratioData) {
+    ctx.fillStyle = 'rgba(255,200,0,0.6)'; ctx.fillRect(pad.left + 108, pad.top + 2, 12, 3);
+    ctx.fillStyle = '#8b949e'; ctx.fillText('买卖比', pad.left + 124, pad.top + 8);
+  }
 
-  setupChartHover(canvas, labels, [
+  const hoverSeries = [
     { label: '买入', data: buyData },
     { label: '卖出', data: sellData }
-  ], pad, cw, ch, 0, max);
+  ];
+  if (ratioData) hoverSeries.push({ label: '买卖比', data: ratioData });
+  setupChartHover(canvas, labels, hoverSeries, pad, cw, ch, 0, max);
 }
 
 function calcRSI(closes, period = 14) {
@@ -937,6 +1028,14 @@ function calcMA(closes, period) {
     ma[i] = sum / period;
   }
   return ma;
+}
+function calcEMA(closes, period) {
+  const k = 2 / (period + 1);
+  const ema = [closes[0]];
+  for (let i = 1; i < closes.length; i++) {
+    ema.push(closes[i] * k + ema[i - 1] * (1 - k));
+  }
+  return ema;
 }
 
 function drawCandlestick(canvas, klines, tf) {
@@ -1421,8 +1520,8 @@ function renderCharts(data) {
       <canvas id="c-taker"></canvas>
     </div>
     <div class="chart-card" style="grid-column: 1 / -1;">
-      <h3>详细数据表</h3>
-      <div style="display:grid; grid-template-columns:1fr 1fr; gap:16px;">
+      <h3 style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'grid':'none'; this.querySelector('span').textContent=this.nextElementSibling.style.display==='none'?'展开':'收起';">详细数据表 <span style="font-size:12px;font-weight:400;color:var(--text2);">展开</span></h3>
+      <div style="display:none; grid-template-columns:1fr 1fr; gap:16px;">
         <div>
           <h4 style="font-size:13px;color:var(--text2);margin-bottom:6px;">大户持仓多空比 (1h)</h4>
           <table>
@@ -1476,12 +1575,13 @@ function renderCharts(data) {
       [{ label: 'OI (USDT)', data: data.oiHist.map(d => parseFloat(d.sumOpenInterestValue)) }]
     );
 
-    // Taker volume bar chart
+    // Taker volume bar chart with ratio overlay
     drawBarChart(
       document.getElementById('c-taker'),
       data.takerVol.map(d => ts2time(d.timestamp)),
       data.takerVol.map(d => parseFloat(d.buyVol)),
       data.takerVol.map(d => parseFloat(d.sellVol)),
+      data.takerVol.map(d => parseFloat(d.buyVol) / (parseFloat(d.sellVol) || 1)),
     );
   });
 }
@@ -2333,47 +2433,127 @@ async function checkCoinDirection(sym) {
 
     let buyScore = 0, sellScore = 0;
     let buyReasons = [], sellReasons = [];
+    const strat = currentStrategy.conditions;
+    const getW = id => { const c = strat.find(x => x.id === id); return c ? c.weight : 0; };
+    const getV = id => { const c = strat.find(x => x.id === id); return c ? c.value : '忽略'; };
 
-    // Technical indicators
-    if (distMA20 > -0.03 && distMA20 < 0.02) { buyScore += 1; buyReasons.push('近MA20支撑'); }
-    if ((cur - support) / support < 0.05) { buyScore += 1; buyReasons.push('近支撑位'); }
-    if (latestRSI < 35) { buyScore += 2; buyReasons.push('RSI超卖'); }
-    else if (latestRSI < 50) { buyScore += 1; buyReasons.push('RSI偏低'); }
-    if (last.dif > last.dea && prev.dif <= prev.dea) { buyScore += 2; buyReasons.push('MACD金叉'); }
-    else if (last.dif < last.dea && (last.dif - last.dea) > (prev.dif - prev.dea)) { buyScore += 1; buyReasons.push('MACD收敛'); }
-    if (cur > ma20 && ma20 > ma60) { buyScore += 1; buyReasons.push('多头排列'); }
+    // MA cross
+    const maCrossV = getV('ma_cross'), maCrossW = getW('ma_cross');
+    if (maCrossV !== '忽略') {
+      if (last.dif > last.dea && prev.dif <= prev.dea) { buyScore += maCrossW; buyReasons.push('MACD金叉'); }
+      if (last.dif < last.dea && prev.dif >= prev.dea) { sellScore += maCrossW; sellReasons.push('MACD死叉'); }
+    }
 
-    if (distMA20 > 0.05) { sellScore += 1; sellReasons.push('远高于MA20'); }
-    if ((resistance - cur) / cur < 0.02) { sellScore += 2; sellReasons.push('近阻力位'); }
-    if (latestRSI > 70) { sellScore += 2; sellReasons.push('RSI超买'); }
-    else if (latestRSI > 60) { sellScore += 1; sellReasons.push('RSI偏高'); }
-    if (last.dif < last.dea && prev.dif >= prev.dea) { sellScore += 2; sellReasons.push('MACD死叉'); }
-    else if (last.dif > last.dea && (last.dif - last.dea) < (prev.dif - prev.dea)) { sellScore += 1; sellReasons.push('MACD衰减'); }
-    if (cur < ma20 && ma20 < ma60) { sellScore += 1; sellReasons.push('空头排列'); }
+    // MA trend
+    const maTrendV = getV('ma_trend'), maTrendW = getW('ma_trend');
+    if (maTrendV !== '忽略') {
+      if (cur > ma20 && ma20 > ma60) { buyScore += maTrendW; buyReasons.push('多头排列'); }
+      if (cur < ma20 && ma20 < ma60) { sellScore += maTrendW; sellReasons.push('空头排列'); }
+    }
+
+    // RSI
+    const rsiOBV = getV('rsi_ob'), rsiOBW = getW('rsi_ob');
+    if (rsiOBV !== '忽略' && latestRSI > 70) { sellScore += rsiOBW; sellReasons.push('RSI超买'); }
+    const rsiOSV = getV('rsi_os'), rsiOSW = getW('rsi_os');
+    if (rsiOSV !== '忽略' && latestRSI < 30) { buyScore += rsiOSW; buyReasons.push('RSI超卖'); }
+
+    // MACD cross
+    const macdV = getV('macd_cross'), macdW = getW('macd_cross');
+    if (macdV !== '忽略') {
+      if (last.dif > last.dea && prev.dif <= prev.dea) { buyScore += macdW; buyReasons.push('MACD金叉'); }
+      if (last.dif < last.dea && prev.dif >= prev.dea) { sellScore += macdW; sellReasons.push('MACD死叉'); }
+    }
+
+    // Volume surge - use candle volume
+    const volV = getV('vol_surge'), volW = getW('vol_surge');
+    if (volV !== '忽略') {
+      const vols = raw.map(k => parseFloat(k[5]));
+      const avgVol = vols.slice(-20, -1).reduce((a,b) => a+b, 0) / 19;
+      if (vols[vols.length - 1] > avgVol * 2) {
+        if (cur > closes[closes.length - 2]) { buyScore += volW; buyReasons.push('放量上涨'); }
+        else { sellScore += volW; sellReasons.push('放量下跌'); }
+      }
+    }
+
+    // EMA fast/slow crossover
+    const emaV = getV('ema_fast_slow'), emaW = getW('ema_fast_slow');
+    if (emaV !== '忽略' && closes.length >= 26) {
+      const ema12 = calcEMA(closes, 12), ema26 = calcEMA(closes, 26);
+      const eL = ema12.length - 1, eP = eL - 1;
+      if (ema12[eL] > ema26[eL] && ema12[eP] <= ema26[eP]) { buyScore += emaW; buyReasons.push('EMA金叉'); }
+      if (ema12[eL] < ema26[eL] && ema12[eP] >= ema26[eP]) { sellScore += emaW; sellReasons.push('EMA死叉'); }
+    }
+
+    // Bollinger Bands
+    const bollV = getV('boll_band'), bollW = getW('boll_band');
+    if (bollV !== '忽略' && closes.length >= 20) {
+      const slice20 = closes.slice(-20);
+      const bollMA = slice20.reduce((a,b) => a+b, 0) / 20;
+      const stdDev = Math.sqrt(slice20.reduce((s, v) => s + (v - bollMA) ** 2, 0) / 20);
+      const upper = bollMA + 2 * stdDev, lower = bollMA - 2 * stdDev;
+      if (cur <= lower * 1.01) { buyScore += bollW; buyReasons.push('触布林下轨'); }
+      if (cur >= upper * 0.99) { sellScore += bollW; sellReasons.push('触布林上轨'); }
+    }
+
+    // Support/resistance
+    const srV = getV('support_resist'), srW = getW('support_resist');
+    if (srV !== '忽略') {
+      if ((cur - support) / support < 0.03) { buyScore += srW; buyReasons.push('近支撑位'); }
+      if ((resistance - cur) / cur < 0.02) { sellScore += srW; sellReasons.push('近阻力位'); }
+    }
+
+    // Price action - engulfing / hammer
+    const paV = getV('price_action'), paW = getW('price_action');
+    if (paV !== '忽略' && raw.length >= 2) {
+      const lastK = raw[raw.length - 1], prevK = raw[raw.length - 2];
+      const lOpen = parseFloat(lastK[1]), lClose = parseFloat(lastK[4]), lLow = parseFloat(lastK[3]), lHigh = parseFloat(lastK[2]);
+      const pOpen = parseFloat(prevK[1]), pClose = parseFloat(prevK[4]);
+      const body = Math.abs(lClose - lOpen), lowerWick = Math.min(lOpen, lClose) - lLow;
+      if (lClose > lOpen && lClose > pOpen && lOpen < pClose) { buyScore += paW; buyReasons.push('看涨吞没'); }
+      if (lClose < lOpen && lClose < pOpen && lOpen > pClose) { sellScore += paW; sellReasons.push('看跌吞没'); }
+      if (lowerWick > body * 2 && lClose > lOpen) { buyScore += paW; buyReasons.push('锤子线'); }
+      const upperWick = lHigh - Math.max(lOpen, lClose);
+      if (upperWick > body * 2 && lClose < lOpen) { sellScore += paW; sellReasons.push('射击之星'); }
+    }
+
+    // OI change
+    const oiV = getV('oi_change'), oiW = getW('oi_change');
+    if (oiV !== '忽略' && smartData && smartData.oi && smartData.oi.length >= 2) {
+      const oiArr = smartData.oi;
+      const latestOI = parseFloat(oiArr[oiArr.length - 1].sumOpenInterest);
+      const prevOI = parseFloat(oiArr[oiArr.length - 2].sumOpenInterest);
+      const oiChange = (latestOI - prevOI) / prevOI;
+      if (oiChange > 0.03) {
+        if (cur > closes[closes.length - 2]) { buyScore += oiW; buyReasons.push(`OI增仓+涨`); }
+        else { sellScore += oiW; sellReasons.push(`OI增仓+跌`); }
+      }
+    }
+
+    // Funding rate
+    const frV = getV('funding_rate'), frW = getW('funding_rate');
+    if (frV !== '忽略' && smartData && smartData.fundingRate && smartData.fundingRate.lastFundingRate) {
+      const fr = parseFloat(smartData.fundingRate.lastFundingRate);
+      if (fr < -0.0005) { buyScore += frW; buyReasons.push(`负费率(${(fr*100).toFixed(3)}%)`); }
+      if (fr > 0.001) { sellScore += frW; sellReasons.push(`高费率(${(fr*100).toFixed(3)}%)`); }
+    }
 
     // Smart money indicators
     if (smartData) {
+      const topW = getW('top_ratio'), topV = getV('top_ratio');
       const pos = smartData.topPositions;
-      if (pos && pos.length >= 2) {
+      if (topV !== '忽略' && pos && pos.length >= 2) {
         const latestR = parseFloat(pos[pos.length - 1].longShortRatio);
         const prevR = parseFloat(pos[pos.length - 2].longShortRatio);
-        if (latestR > 1.2) { buyScore += 2; buyReasons.push(`大户偏多(${latestR.toFixed(2)})`); }
-        else if (latestR > 1) { buyScore += 1; buyReasons.push(`大户偏多(${latestR.toFixed(2)})`); }
-        if (latestR < 0.8) { sellScore += 2; sellReasons.push(`大户偏空(${latestR.toFixed(2)})`); }
-        else if (latestR < 1) { sellScore += 1; sellReasons.push(`大户偏空(${latestR.toFixed(2)})`); }
-        if (latestR > prevR + 0.05) { buyScore += 1; buyReasons.push('大户比值↑'); }
-        if (latestR < prevR - 0.05) { sellScore += 1; sellReasons.push('大户比值↓'); }
+        if (latestR > 1.1 && latestR > prevR) { buyScore += topW; buyReasons.push(`大户偏多↑(${latestR.toFixed(2)})`); }
+        if (latestR < 0.9 && latestR < prevR) { sellScore += topW; sellReasons.push(`大户偏空↓(${latestR.toFixed(2)})`); }
       }
+      const takerW = getW('taker_buy'), takerV = getV('taker_buy');
       const taker = smartData.takerVol;
-      if (taker && taker.length >= 2) {
+      if (takerV !== '忽略' && taker && taker.length >= 2) {
         const latestBS = parseFloat(taker[taker.length - 1].buySellRatio);
         const prevBS = parseFloat(taker[taker.length - 2].buySellRatio);
-        if (latestBS > 1.2) { buyScore += 2; buyReasons.push(`主动买入强(${latestBS.toFixed(2)})`); }
-        else if (latestBS > 1.05) { buyScore += 1; buyReasons.push(`主动买入(${latestBS.toFixed(2)})`); }
-        if (latestBS < 0.8) { sellScore += 2; sellReasons.push(`主动卖出强(${latestBS.toFixed(2)})`); }
-        else if (latestBS < 0.95) { sellScore += 1; sellReasons.push(`主动卖出(${latestBS.toFixed(2)})`); }
-        if (latestBS > prevBS + 0.1) { buyScore += 1; buyReasons.push('买入放量'); }
-        if (latestBS < prevBS - 0.1) { sellScore += 1; sellReasons.push('卖出放量'); }
+        if (latestBS > 1.1 && latestBS > prevBS) { buyScore += takerW; buyReasons.push(`主动买入↑(${latestBS.toFixed(2)})`); }
+        if (latestBS < 0.9 && latestBS < prevBS) { sellScore += takerW; sellReasons.push(`主动卖出↓(${latestBS.toFixed(2)})`); }
       }
     }
 
@@ -2530,6 +2710,574 @@ function clearOverlay() {
   ctx.clearRect(0, 0, overlay.width, overlay.height);
   document.getElementById('klineOHLC').innerHTML = '';
 }
+
+// ===== 策略管理 =====
+const DEFAULT_STRATEGY = {
+  name: '默认策略',
+  conditions: [
+    { id: 'ma_cross', label: 'MA金叉/死叉', group: '趋势', type: 'select', options: ['金叉做多','死叉做空','忽略'], value: '金叉做多', weight: 2 },
+    { id: 'ma_trend', label: 'MA趋势排列', group: '趋势', type: 'select', options: ['多头排列做多','空头排列做空','忽略'], value: '多头排列做多', weight: 1 },
+    { id: 'ema_fast_slow', label: 'EMA快慢线交叉', group: '趋势', type: 'select', options: ['金叉做多','死叉做空','忽略'], value: '金叉做多', weight: 1 },
+    { id: 'rsi_ob', label: 'RSI超买(>70)', group: '震荡', type: 'select', options: ['做空信号','忽略'], value: '做空信号', weight: 1 },
+    { id: 'rsi_os', label: 'RSI超卖(<30)', group: '震荡', type: 'select', options: ['做多信号','忽略'], value: '做多信号', weight: 1 },
+    { id: 'macd_cross', label: 'MACD金叉/死叉', group: '震荡', type: 'select', options: ['金叉做多','死叉做空','忽略'], value: '金叉做多', weight: 2 },
+    { id: 'boll_band', label: '布林带突破', group: '震荡', type: 'select', options: ['下轨做多','上轨做空','忽略'], value: '下轨做多', weight: 1 },
+    { id: 'vol_surge', label: '放量(>2倍均量)', group: '量能', type: 'select', options: ['确认信号','忽略'], value: '确认信号', weight: 1 },
+    { id: 'oi_change', label: 'OI持仓量变化', group: '量能', type: 'select', options: ['增仓确认','减仓警示','忽略'], value: '增仓确认', weight: 1 },
+    { id: 'funding_rate', label: '资金费率', group: '情绪', type: 'select', options: ['负费率做多','正费率做空','忽略'], value: '负费率做多', weight: 1 },
+    { id: 'top_ratio', label: '大户多空比趋势', group: '聪明钱', type: 'select', options: ['做多信号','做空信号','忽略'], value: '做多信号', weight: 2 },
+    { id: 'taker_buy', label: '主动买卖量趋势', group: '聪明钱', type: 'select', options: ['做多信号','做空信号','忽略'], value: '做多信号', weight: 1 },
+    { id: 'support_resist', label: '支撑/阻力位', group: '价格结构', type: 'select', options: ['支撑做多','阻力做空','忽略'], value: '支撑做多', weight: 1 },
+    { id: 'price_action', label: '吞没/锤子形态', group: '价格结构', type: 'select', options: ['确认信号','忽略'], value: '确认信号', weight: 1 },
+  ]
+};
+
+let currentStrategy = JSON.parse(localStorage.getItem('userStrategy')) || JSON.parse(JSON.stringify(DEFAULT_STRATEGY));
+
+function toggleStrategyPanel() {
+  const body = document.getElementById('strategyBody');
+  const toggle = document.getElementById('strategyToggle');
+  if (body.style.display === 'none') {
+    body.style.display = 'block'; toggle.textContent = '收起';
+    renderStratEditPanel();
+  } else {
+    body.style.display = 'none'; toggle.textContent = '展开';
+  }
+}
+
+function switchStratTab(tab) {
+  document.getElementById('stratTabEdit').classList.toggle('active', tab === 'edit');
+  document.getElementById('stratTabBacktest').classList.toggle('active', tab === 'backtest');
+  document.getElementById('stratEditPanel').style.display = tab === 'edit' ? 'block' : 'none';
+  document.getElementById('stratBacktestPanel').style.display = tab === 'backtest' ? 'block' : 'none';
+  if (tab === 'edit') renderStratEditPanel();
+  if (tab === 'backtest') renderBacktestPanel();
+}
+
+function renderStratEditPanel() {
+  const panel = document.getElementById('stratEditPanel');
+  let html = '<div style="margin-bottom:8px;font-size:13px;color:var(--text2);">调整条件参数与权重，保存后立即应用到推荐逻辑</div>';
+
+  const groups = {};
+  currentStrategy.conditions.forEach((c, i) => {
+    const g = c.group || '其他';
+    if (!groups[g]) groups[g] = [];
+    groups[g].push({ ...c, idx: i });
+  });
+
+  Object.entries(groups).forEach(([gName, conds]) => {
+    html += `<div class="strat-group"><div class="strat-group-title">${gName}</div>`;
+    conds.forEach(c => {
+      const optHtml = c.options.map(o => `<option value="${o}"${o === c.value?' selected':''}>${o}</option>`).join('');
+      html += `<div class="strat-condition">
+        <span class="cond-name">${c.label}</span>
+        <select onchange="updateStratCond(${c.idx},'value',this.value)">${optHtml}</select>
+        <span>权重 <input class="cond-weight" type="number" min="0" max="5" value="${c.weight}" onchange="updateStratCond(${c.idx},'weight',+this.value)"></span>
+      </div>`;
+    });
+    html += '</div>';
+  });
+
+  html += `<div class="strat-actions">
+    <button class="strat-btn-save" onclick="saveStrategy()">保存策略</button>
+    <button class="strat-btn-reset" onclick="resetStrategy()">恢复默认</button>
+    <button class="strat-btn-backtest" onclick="switchStratTab('backtest')">去回测</button>
+  </div>`;
+  panel.innerHTML = html;
+}
+
+function updateStratCond(idx, key, val) {
+  currentStrategy.conditions[idx][key] = val;
+}
+
+function saveStrategy() {
+  localStorage.setItem('userStrategy', JSON.stringify(currentStrategy));
+  clearAllScanCache();
+  alert('策略已保存并应用！推荐列表将使用新策略重新计算。');
+}
+
+function resetStrategy() {
+  currentStrategy = JSON.parse(JSON.stringify(DEFAULT_STRATEGY));
+  localStorage.removeItem('userStrategy');
+  renderStratEditPanel();
+  clearAllScanCache();
+}
+
+function renderBacktestPanel() {
+  const panel = document.getElementById('stratBacktestPanel');
+  panel.innerHTML = `
+    <div style="margin-bottom:10px;font-size:13px;color:var(--text2);">选择币种和时间范围进行策略回测</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;">
+      <label style="font-size:12px;">币种</label>
+      <input id="btSymbol" value="${symbol}" style="width:120px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+      <label style="font-size:12px;">周期</label>
+      <select id="btInterval" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+        <option value="1h">1H</option><option value="4h" selected>4H</option><option value="1d">1D</option>
+      </select>
+      <label style="font-size:12px;">K线数</label>
+      <input id="btBars" type="number" value="200" min="50" max="1000" style="width:60px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+      <button class="strat-btn-backtest" onclick="runBacktest()">开始回测</button>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding-top:8px;border-top:1px solid var(--border);">
+      <label style="font-size:12px;">批量回测</label>
+      <input id="btMultiSymbols" placeholder="多币种用逗号隔开,如 BTC,ETH,SOL" style="width:260px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+      <button class="strat-btn-save" onclick="runBatchBacktest()">批量回测</button>
+      <button style="padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid var(--border);background:var(--bg);color:var(--text2);" onclick="fillTopCoins()">填入Top10</button>
+    </div>
+    <div id="backtestResult"></div>
+    <div id="batchBacktestResult"></div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:10px;padding-top:8px;border-top:1px solid var(--border);">
+      <label style="font-size:12px;">参数优化</label>
+      <input id="optSymbol" value="${symbol}" style="width:100px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+      <select id="optMetric" style="background:var(--bg);border:1px solid var(--border);color:var(--text);padding:4px 8px;border-radius:4px;font-size:12px;">
+        <option value="pnl">最大收益</option><option value="sharpe">最优夏普</option><option value="winrate">最高胜率</option>
+      </select>
+      <button class="strat-btn-backtest" onclick="runOptimize()">开始优化</button>
+      <span id="optProgress" style="font-size:11px;color:var(--text2);"></span>
+    </div>
+    <div id="optimizeResult"></div>`;
+}
+
+async function runBacktest() {
+  const sym = document.getElementById('btSymbol').value.toUpperCase();
+  const interval = document.getElementById('btInterval').value;
+  const bars = +document.getElementById('btBars').value;
+  const resultDiv = document.getElementById('backtestResult');
+  resultDiv.innerHTML = '<span style="color:var(--text2)">回测中...</span>';
+
+  try {
+    const res = await fetch(`/api/klines?symbol=${sym}&interval=${interval}&limit=${bars}`);
+    const klines = await res.json();
+    if (!klines || klines.length < 50) { resultDiv.innerHTML = '<span style="color:var(--red)">数据不足</span>'; return; }
+
+    const closes = klines.map(k => parseFloat(k[4]));
+    const ma7 = calcMA(closes, 7), ma25 = calcMA(closes, 25);
+    const rsi = calcRSI(closes, 14);
+    const macd = calcMACD(closes);
+    macd.histogram = macd.macd;
+
+    let trades = [], position = null;
+    for (let i = 30; i < klines.length; i++) {
+      const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+      if (!position && score.long >= 3) {
+        position = { dir: 'long', entry: closes[i], entryIdx: i };
+      } else if (!position && score.short >= 3) {
+        position = { dir: 'short', entry: closes[i], entryIdx: i };
+      } else if (position) {
+        const pnl = position.dir === 'long' ? (closes[i] / position.entry - 1) : (1 - closes[i] / position.entry);
+        if (pnl <= -0.03 || pnl >= 0.05 || (position.dir === 'long' && score.short >= 3) || (position.dir === 'short' && score.long >= 3)) {
+          trades.push({ ...position, exit: closes[i], exitIdx: i, pnl });
+          position = null;
+        }
+      }
+    }
+
+    const wins = trades.filter(t => t.pnl > 0).length;
+    const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+    const maxDD = trades.reduce((dd, t) => Math.min(dd, t.pnl), 0);
+
+    // Build equity curve (cumulative PnL per bar)
+    const equity = [0];
+    let cumPnl = 0, tradeIdx = 0;
+    for (let i = 30; i < klines.length; i++) {
+      while (tradeIdx < trades.length && trades[tradeIdx].exitIdx <= i) {
+        cumPnl += trades[tradeIdx].pnl;
+        tradeIdx++;
+      }
+      equity.push(cumPnl);
+    }
+
+    // Trade detail table rows
+    const tradeRows = trades.map((t, idx) => {
+      const entryTime = klines[t.entryIdx] ? new Date(klines[t.entryIdx][0]).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '-';
+      const exitTime = klines[t.exitIdx] ? new Date(klines[t.exitIdx][0]).toLocaleString('zh-CN', {month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit'}) : '-';
+      const dirLabel = t.dir === 'long' ? '<span style="color:var(--green)">做多</span>' : '<span style="color:var(--red)">做空</span>';
+      const pnlColor = t.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      return `<tr>
+        <td>${idx + 1}</td><td>${dirLabel}</td>
+        <td>${entryTime}</td><td>${t.entry.toFixed(4)}</td>
+        <td>${exitTime}</td><td>${t.exit.toFixed(4)}</td>
+        <td style="color:${pnlColor};font-weight:600;">${(t.pnl*100).toFixed(2)}%</td>
+      </tr>`;
+    }).join('');
+
+    resultDiv.innerHTML = `<div class="backtest-result">
+      <div class="stat">交易次数 <span class="val">${trades.length}</span></div>
+      <div class="stat">胜率 <span class="val" style="color:${wins/trades.length > 0.5 ? 'var(--green)':'var(--red)'}">${trades.length ? (wins/trades.length*100).toFixed(1) : 0}%</span></div>
+      <div class="stat">总收益 <span class="val" style="color:${totalPnl>=0?'var(--green)':'var(--red)'}">${(totalPnl*100).toFixed(2)}%</span></div>
+      <div class="stat">最大回撤 <span class="val" style="color:var(--red)">${(maxDD*100).toFixed(2)}%</span></div>
+      <div class="stat">盈亏比 <span class="val">${trades.length ? (wins > 0 ? (trades.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0)/wins / (trades.filter(t=>t.pnl<=0).length > 0 ? Math.abs(trades.filter(t=>t.pnl<=0).reduce((s,t)=>s+t.pnl,0)/(trades.length-wins)) : 1)).toFixed(2) : '0') : '--'}</span></div>
+      <div style="margin-top:10px;font-size:12px;color:var(--text2);">收益曲线</div>
+      <canvas id="equityCurve" width="800" height="180" style="width:100%;height:180px;margin-top:4px;border-radius:6px;background:var(--bg);"></canvas>
+      <div style="margin-top:12px;font-size:12px;color:var(--text2);">交易明细</div>
+      <table style="width:100%;margin-top:6px;font-size:11px;border-collapse:collapse;">
+        <thead><tr style="color:var(--text2);border-bottom:1px solid var(--border);">
+          <th style="padding:4px;">#</th><th>方向</th><th>开仓时间</th><th>开仓价</th><th>平仓时间</th><th>平仓价</th><th>收益</th>
+        </tr></thead>
+        <tbody>${tradeRows}</tbody>
+      </table>
+    </div>`;
+
+    drawEquityCurve(equity, trades);
+  } catch (e) {
+    resultDiv.innerHTML = `<span style="color:var(--red)">回测失败: ${e.message}</span>`;
+  }
+}
+
+function drawEquityCurve(equity, trades) {
+  const canvas = document.getElementById('equityCurve');
+  if (!canvas) return;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = canvas.clientWidth * dpr;
+  canvas.height = canvas.clientHeight * dpr;
+  const ctx = canvas.getContext('2d');
+  ctx.scale(dpr, dpr);
+
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  const pad = { top: 20, right: 20, bottom: 25, left: 55 };
+  const plotW = W - pad.left - pad.right;
+  const plotH = H - pad.top - pad.bottom;
+
+  const maxVal = Math.max(...equity, 0.001);
+  const minVal = Math.min(...equity, -0.001);
+  const range = maxVal - minVal || 0.01;
+
+  const xStep = plotW / (equity.length - 1 || 1);
+  const toY = v => pad.top + plotH - ((v - minVal) / range) * plotH;
+
+  // Grid lines
+  ctx.strokeStyle = 'rgba(255,255,255,0.06)';
+  ctx.lineWidth = 1;
+  const gridLines = 4;
+  for (let i = 0; i <= gridLines; i++) {
+    const y = pad.top + (plotH / gridLines) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    const val = maxVal - (range / gridLines) * i;
+    ctx.fillStyle = 'rgba(255,255,255,0.4)';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText((val * 100).toFixed(1) + '%', pad.left - 5, y + 4);
+  }
+
+  // Zero line
+  const zeroY = toY(0);
+  ctx.strokeStyle = 'rgba(255,255,255,0.2)';
+  ctx.setLineDash([4, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.left, zeroY); ctx.lineTo(W - pad.right, zeroY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Fill area
+  ctx.beginPath();
+  ctx.moveTo(pad.left, zeroY);
+  for (let i = 0; i < equity.length; i++) {
+    ctx.lineTo(pad.left + i * xStep, toY(equity[i]));
+  }
+  ctx.lineTo(pad.left + (equity.length - 1) * xStep, zeroY);
+  ctx.closePath();
+  const grad = ctx.createLinearGradient(0, pad.top, 0, H - pad.bottom);
+  const finalPositive = equity[equity.length - 1] >= 0;
+  grad.addColorStop(0, finalPositive ? 'rgba(63,185,80,0.25)' : 'rgba(248,81,73,0.15)');
+  grad.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.fill();
+
+  // Main equity line
+  ctx.beginPath();
+  ctx.strokeStyle = finalPositive ? '#3fb950' : '#f85149';
+  ctx.lineWidth = 2;
+  for (let i = 0; i < equity.length; i++) {
+    const x = pad.left + i * xStep, y = toY(equity[i]);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  }
+  ctx.stroke();
+
+  // Trade markers
+  trades.forEach(t => {
+    const idx = t.exitIdx - 30;
+    if (idx < 0 || idx >= equity.length) return;
+    const x = pad.left + idx * xStep;
+    const y = toY(equity[idx]);
+    ctx.beginPath();
+    ctx.arc(x, y, 4, 0, Math.PI * 2);
+    ctx.fillStyle = t.pnl >= 0 ? '#3fb950' : '#f85149';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(255,255,255,0.6)';
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  });
+
+  // End label
+  const finalPnl = equity[equity.length - 1];
+  ctx.fillStyle = finalPositive ? '#3fb950' : '#f85149';
+  ctx.font = 'bold 11px monospace';
+  ctx.textAlign = 'left';
+  ctx.fillText((finalPnl * 100).toFixed(2) + '%', pad.left + (equity.length - 1) * xStep + 6, toY(finalPnl) + 4);
+}
+
+function fillTopCoins() {
+  const top10 = (allTopSymbols || []).slice(0, 10).map(s => s.replace('USDT', '')).join(',');
+  document.getElementById('btMultiSymbols').value = top10 || 'BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,DOT,LINK';
+}
+
+async function runOptimize() {
+  const sym = document.getElementById('optSymbol').value.toUpperCase().replace(/USDT$/, '') + 'USDT';
+  const interval = document.getElementById('btInterval').value;
+  const bars = +document.getElementById('btBars').value;
+  const metric = document.getElementById('optMetric').value;
+  const progressEl = document.getElementById('optProgress');
+  const resultDiv = document.getElementById('optimizeResult');
+  resultDiv.innerHTML = '';
+  progressEl.textContent = '获取数据...';
+
+  const res = await fetch(`/api/klines?symbol=${sym}&interval=${interval}&limit=${bars}`);
+  const klines = await res.json();
+  if (!klines || klines.length < 50) { resultDiv.innerHTML = '<span style="color:var(--red)">数据不足</span>'; progressEl.textContent = ''; return; }
+
+  const closes = klines.map(k => parseFloat(k[4]));
+  const ma7 = calcMA(closes, 7), ma25 = calcMA(closes, 25);
+  const rsi = calcRSI(closes, 14);
+  const macd = calcMACD(closes);
+  macd.histogram = macd.macd;
+
+  // Generate weight combinations for key conditions (0,1,2,3 each)
+  const condIds = currentStrategy.conditions.map(c => c.id);
+  const weightOptions = [0, 1, 2, 3];
+  const totalCombos = Math.pow(weightOptions.length, Math.min(condIds.length, 6));
+  progressEl.textContent = `测试 ${totalCombos} 个组合...`;
+
+  // Use sampling approach for large search space
+  const maxIter = 500;
+  const results = [];
+  const originalWeights = currentStrategy.conditions.map(c => c.weight);
+
+  for (let iter = 0; iter < maxIter; iter++) {
+    // Randomize weights
+    const testWeights = currentStrategy.conditions.map(() => weightOptions[Math.floor(Math.random() * weightOptions.length)]);
+    currentStrategy.conditions.forEach((c, i) => c.weight = testWeights[i]);
+
+    let trades = [], position = null;
+    for (let i = 30; i < klines.length; i++) {
+      const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+      if (!position && score.long >= 3) position = { dir: 'long', entry: closes[i], entryIdx: i };
+      else if (!position && score.short >= 3) position = { dir: 'short', entry: closes[i], entryIdx: i };
+      else if (position) {
+        const pnl = position.dir === 'long' ? (closes[i] / position.entry - 1) : (1 - closes[i] / position.entry);
+        if (pnl <= -0.03 || pnl >= 0.05 || (position.dir === 'long' && score.short >= 3) || (position.dir === 'short' && score.long >= 3)) {
+          trades.push({ pnl }); position = null;
+        }
+      }
+    }
+
+    if (trades.length < 2) continue;
+    const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+    const winRate = trades.filter(t => t.pnl > 0).length / trades.length;
+    const avgPnl = totalPnl / trades.length;
+    const stdDev = Math.sqrt(trades.reduce((s, t) => s + (t.pnl - avgPnl) ** 2, 0) / trades.length);
+    const sharpe = stdDev > 0 ? avgPnl / stdDev : 0;
+
+    let score;
+    if (metric === 'pnl') score = totalPnl;
+    else if (metric === 'sharpe') score = sharpe;
+    else score = winRate;
+
+    results.push({ weights: [...testWeights], score, totalPnl, winRate, trades: trades.length, sharpe });
+
+    if (iter % 50 === 0) progressEl.textContent = `${iter}/${maxIter} 已测试...`;
+  }
+
+  // Restore original weights
+  currentStrategy.conditions.forEach((c, i) => c.weight = originalWeights[i]);
+
+  results.sort((a, b) => b.score - a.score);
+  const top5 = results.slice(0, 5);
+  progressEl.textContent = `完成! 测试了 ${maxIter} 个组合`;
+
+  const condLabels = currentStrategy.conditions.map(c => c.label.replace(/[（(].*/g, '').slice(0, 4));
+  let html = `<div style="margin-top:10px;font-size:12px;color:var(--text2);margin-bottom:6px;">Top 5 参数组合（${sym} ${interval}）按${metric === 'pnl' ? '总收益' : metric === 'sharpe' ? '夏普比' : '胜率'}排序</div>`;
+  html += `<table style="width:100%;font-size:10px;border-collapse:collapse;">
+    <thead><tr style="color:var(--text2);border-bottom:1px solid var(--border);">
+      <th style="padding:3px;">#</th><th>交易</th><th>胜率</th><th>收益</th><th>夏普</th>
+      ${condLabels.map(l => `<th style="max-width:35px;overflow:hidden;">${l}</th>`).join('')}
+      <th></th>
+    </tr></thead><tbody>`;
+
+  top5.forEach((r, i) => {
+    const pnlC = r.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    html += `<tr>
+      <td style="padding:3px;">${i+1}</td>
+      <td>${r.trades}</td>
+      <td style="color:${r.winRate>=0.5?'var(--green)':'var(--red)'};">${(r.winRate*100).toFixed(0)}%</td>
+      <td style="color:${pnlC};font-weight:600;">${(r.totalPnl*100).toFixed(1)}%</td>
+      <td>${r.sharpe.toFixed(2)}</td>
+      ${r.weights.map(w => `<td style="text-align:center;${w===0?'color:var(--text2);':''}">${w}</td>`).join('')}
+      <td><button style="font-size:10px;padding:2px 6px;cursor:pointer;border:1px solid var(--green);color:var(--green);background:transparent;border-radius:3px;" onclick="applyOptWeights([${r.weights}])">应用</button></td>
+    </tr>`;
+  });
+  html += '</tbody></table>';
+  resultDiv.innerHTML = html;
+}
+
+function applyOptWeights(weights) {
+  currentStrategy.conditions.forEach((c, i) => { if (i < weights.length) c.weight = weights[i]; });
+  localStorage.setItem('userStrategy', JSON.stringify(currentStrategy));
+  clearAllScanCache();
+  document.getElementById('optimizeResult').innerHTML += '<div style="margin-top:6px;font-size:11px;color:var(--green);">✓ 已应用并保存</div>';
+}
+
+async function runBatchBacktest() {
+  const input = document.getElementById('btMultiSymbols').value.trim();
+  if (!input) { alert('请输入至少一个币种'); return; }
+  const symbols = input.split(/[,，\s]+/).map(s => s.toUpperCase().replace(/USDT$/, '') + 'USDT');
+  const interval = document.getElementById('btInterval').value;
+  const bars = +document.getElementById('btBars').value;
+  const resultDiv = document.getElementById('batchBacktestResult');
+  resultDiv.innerHTML = '<span style="color:var(--text2)">批量回测中... 0/' + symbols.length + '</span>';
+
+  const results = [];
+  for (let si = 0; si < symbols.length; si++) {
+    const sym = symbols[si];
+    resultDiv.innerHTML = `<span style="color:var(--text2)">批量回测中... ${si+1}/${symbols.length} (${sym})</span>`;
+    try {
+      const res = await fetch(`/api/klines?symbol=${sym}&interval=${interval}&limit=${bars}`);
+      const klines = await res.json();
+      if (!klines || klines.length < 50) { results.push({ sym, error: '数据不足' }); continue; }
+
+      const closes = klines.map(k => parseFloat(k[4]));
+      const ma7 = calcMA(closes, 7), ma25 = calcMA(closes, 25);
+      const rsi = calcRSI(closes, 14);
+      const macd = calcMACD(closes);
+      macd.histogram = macd.macd;
+
+      let trades = [], position = null;
+      for (let i = 30; i < klines.length; i++) {
+        const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+        if (!position && score.long >= 3) {
+          position = { dir: 'long', entry: closes[i], entryIdx: i };
+        } else if (!position && score.short >= 3) {
+          position = { dir: 'short', entry: closes[i], entryIdx: i };
+        } else if (position) {
+          const pnl = position.dir === 'long' ? (closes[i] / position.entry - 1) : (1 - closes[i] / position.entry);
+          if (pnl <= -0.03 || pnl >= 0.05 || (position.dir === 'long' && score.short >= 3) || (position.dir === 'short' && score.long >= 3)) {
+            trades.push({ ...position, exit: closes[i], exitIdx: i, pnl });
+            position = null;
+          }
+        }
+      }
+
+      const wins = trades.filter(t => t.pnl > 0).length;
+      const totalPnl = trades.reduce((s, t) => s + t.pnl, 0);
+      const maxDD = trades.reduce((dd, t) => Math.min(dd, t.pnl), 0);
+      const avgPnl = trades.length ? totalPnl / trades.length : 0;
+      results.push({ sym, trades: trades.length, winRate: trades.length ? wins / trades.length : 0, totalPnl, maxDD, avgPnl });
+    } catch (e) {
+      results.push({ sym, error: e.message });
+    }
+  }
+
+  // Sort by totalPnl descending
+  results.sort((a, b) => (b.totalPnl || -999) - (a.totalPnl || -999));
+
+  const rows = results.map((r, i) => {
+    if (r.error) return `<tr><td>${i+1}</td><td>${r.sym}</td><td colspan="5" style="color:var(--red);">${r.error}</td></tr>`;
+    const pnlColor = r.totalPnl >= 0 ? 'var(--green)' : 'var(--red)';
+    const wrColor = r.winRate >= 0.5 ? 'var(--green)' : 'var(--red)';
+    return `<tr>
+      <td>${i+1}</td><td style="font-weight:600;">${r.sym.replace('USDT','')}</td>
+      <td>${r.trades}</td>
+      <td style="color:${wrColor};">${(r.winRate*100).toFixed(1)}%</td>
+      <td style="color:${pnlColor};font-weight:600;">${(r.totalPnl*100).toFixed(2)}%</td>
+      <td style="color:var(--red);">${(r.maxDD*100).toFixed(2)}%</td>
+      <td>${(r.avgPnl*100).toFixed(2)}%</td>
+    </tr>`;
+  }).join('');
+
+  const totalAvgPnl = results.filter(r => !r.error).reduce((s, r) => s + (r.totalPnl || 0), 0) / (results.filter(r => !r.error).length || 1);
+
+  resultDiv.innerHTML = `
+    <div style="margin-top:12px;font-size:12px;color:var(--text2);margin-bottom:6px;">批量回测对比（${interval} / ${bars}根K线）· 平均收益 <span style="color:${totalAvgPnl>=0?'var(--green)':'var(--red)'};">${(totalAvgPnl*100).toFixed(2)}%</span></div>
+    <table style="width:100%;font-size:11px;border-collapse:collapse;">
+      <thead><tr style="color:var(--text2);border-bottom:1px solid var(--border);">
+        <th style="padding:4px;">#</th><th>币种</th><th>交易数</th><th>胜率</th><th>总收益</th><th>最大回撤</th><th>均笔收益</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>`;
+}
+
+function calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines) {
+  let long = 0, short = 0;
+  const strat = currentStrategy.conditions;
+  const findCond = id => strat.find(c => c.id === id);
+
+  const maCross = findCond('ma_cross');
+  if (maCross && maCross.value !== '忽略') {
+    if (ma7[i] > ma25[i] && ma7[i-1] <= ma25[i-1]) long += maCross.weight;
+    if (ma7[i] < ma25[i] && ma7[i-1] >= ma25[i-1]) short += maCross.weight;
+  }
+
+  const maTrend = findCond('ma_trend');
+  if (maTrend && maTrend.value !== '忽略') {
+    if (closes[i] > ma7[i] && ma7[i] > ma25[i]) long += maTrend.weight;
+    if (closes[i] < ma7[i] && ma7[i] < ma25[i]) short += maTrend.weight;
+  }
+
+  // EMA crossover in backtest
+  const emaCond = findCond('ema_fast_slow');
+  if (emaCond && emaCond.value !== '忽略' && i >= 26) {
+    const ema12 = calcEMA(closes.slice(0, i+1), 12);
+    const ema26 = calcEMA(closes.slice(0, i+1), 26);
+    const eL = ema12.length - 1, eP = eL - 1;
+    if (ema12[eL] > ema26[eL] && ema12[eP] <= ema26[eP]) long += emaCond.weight;
+    if (ema12[eL] < ema26[eL] && ema12[eP] >= ema26[eP]) short += emaCond.weight;
+  }
+
+  const rsiOB = findCond('rsi_ob');
+  if (rsiOB && rsiOB.value !== '忽略' && rsi[i] > 70) short += rsiOB.weight;
+
+  const rsiOS = findCond('rsi_os');
+  if (rsiOS && rsiOS.value !== '忽略' && rsi[i] < 30) long += rsiOS.weight;
+
+  const macdCross = findCond('macd_cross');
+  if (macdCross && macdCross.value !== '忽略' && macd.histogram) {
+    if (macd.histogram[i] > 0 && macd.histogram[i-1] <= 0) long += macdCross.weight;
+    if (macd.histogram[i] < 0 && macd.histogram[i-1] >= 0) short += macdCross.weight;
+  }
+
+  // Bollinger Bands in backtest
+  const bollCond = findCond('boll_band');
+  if (bollCond && bollCond.value !== '忽略' && i >= 20) {
+    const s20 = closes.slice(i-19, i+1);
+    const m = s20.reduce((a,b) => a+b, 0) / 20;
+    const sd = Math.sqrt(s20.reduce((s,v) => s+(v-m)**2, 0) / 20);
+    if (closes[i] <= m - 2*sd) long += bollCond.weight;
+    if (closes[i] >= m + 2*sd) short += bollCond.weight;
+  }
+
+  // Volume surge in backtest
+  const volCond = findCond('vol_surge');
+  if (volCond && volCond.value !== '忽略' && klines && i >= 20) {
+    const vols = klines.map(k => k.volume || parseFloat(k[5] || 0));
+    const avgV = vols.slice(i-19, i).reduce((a,b) => a+b, 0) / 19;
+    if (vols[i] > avgV * 2) {
+      if (closes[i] > closes[i-1]) long += volCond.weight;
+      else short += volCond.weight;
+    }
+  }
+
+  // Price action in backtest
+  const paCond = findCond('price_action');
+  if (paCond && paCond.value !== '忽略' && klines && i >= 1) {
+    const lO = klines[i].open || parseFloat(klines[i][1] || 0);
+    const lC = closes[i];
+    const pO = klines[i-1].open || parseFloat(klines[i-1][1] || 0);
+    const pC = closes[i-1];
+    if (lC > lO && lC > pO && lO < pC) long += paCond.weight;
+    if (lC < lO && lC < pO && lO > pC) short += paCond.weight;
+  }
+
+  return { long, short };
+}
+
+// ===== End 策略管理 =====
 
 if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
