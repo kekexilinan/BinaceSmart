@@ -30,17 +30,20 @@ async function proxyBinance(path) {
   return res.json();
 }
 
-async function handleAPI(symbol) {
+async function handleAPI(symbol, { ratioLimit = 72, oiLimit = 42, takerLimit = 48 } = {}) {
+  const rl = Math.min(500, Math.max(1, parseInt(ratioLimit, 10)));
+  const ol = Math.min(500, Math.max(1, parseInt(oiLimit, 10)));
+  const tl = Math.min(500, Math.max(1, parseInt(takerLimit, 10)));
   const [price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate] =
     await Promise.all([
       proxyBinance(`/fapi/v2/ticker/price?symbol=${symbol}`),
       proxyBinance(`/fapi/v1/ticker/24hr?symbol=${symbol}`),
-      proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=12`),
-      proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=12`),
-      proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=12`),
+      proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
+      proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=${rl}`),
+      proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
       proxyBinance(`/fapi/v1/openInterest?symbol=${symbol}`),
-      proxyBinance(`/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=12`),
-      proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=12`),
+      proxyBinance(`/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=${ol}`),
+      proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=${tl}`),
       proxyBinance(`/fapi/v1/premiumIndex?symbol=${symbol}`),
     ]);
   return { price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate };
@@ -147,8 +150,11 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/data') {
     const symbol = url.searchParams.get('symbol') || 'SLXUSDT';
+    const ratioLimit = url.searchParams.get('ratioLimit') || 72;
+    const oiLimit = url.searchParams.get('oiLimit') || 42;
+    const takerLimit = url.searchParams.get('takerLimit') || 48;
     try {
-      const data = await handleAPI(symbol);
+      const data = await handleAPI(symbol, { ratioLimit, oiLimit, takerLimit });
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(data));
     } catch (e) {

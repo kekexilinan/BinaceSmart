@@ -204,13 +204,25 @@
   .kline-ohlc span { margin-right: 10px; white-space: nowrap; }
   .rsi-label { font-size: 12px; color: var(--text2); margin-top: 4px; }
 
+  .chart-range-bar {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 10px;
+    padding: 6px 12px; background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+  }
   .charts-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(420px, 1fr)); gap: 16px; }
   .chart-card {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; overflow: hidden;
   }
   .chart-card h3 { font-size: 14px; margin-bottom: 12px; color: var(--text2); }
-  .chart-card canvas { width: 100% !important; height: 220px !important; }
+  .chart-card canvas { width: 100% !important; height: 220px !important; cursor: crosshair; }
+  .chart-card { position: relative; }
+  .chart-tooltip {
+    position: fixed; z-index: 9999; pointer-events: none;
+    background: rgba(22,27,34,0.95); border: 1px solid var(--border); border-radius: 6px;
+    padding: 6px 10px; font-size: 11px; color: var(--text); line-height: 1.5;
+    white-space: nowrap; display: none; box-shadow: 0 2px 8px rgba(0,0,0,0.4);
+  }
+  .chart-tooltip.show { display: block; }
 
   table { width: 100%; border-collapse: collapse; font-size: 13px; }
   th { text-align: left; padding: 6px 8px; color: var(--text2); font-weight: 500; border-bottom: 1px solid var(--border); }
@@ -345,6 +357,10 @@
   </div>
 </div>
 
+<div class="chart-range-bar" id="chartRangeBar">
+  <span class="filter-group-label">数据范围</span>
+  <div class="filter-group" id="chartRangeGroup"></div>
+</div>
 <div class="charts-grid" id="charts"></div>
 
 <div class="alert-section">
@@ -376,6 +392,7 @@
   <div class="alert-list" id="alertList"></div>
 </div>
 
+<div class="chart-tooltip" id="chartTooltip"></div>
 <div id="alertToast" class="alert-toast">
   <div class="toast-title" id="toastTitle"></div>
   <div id="toastBody"></div>
@@ -445,6 +462,14 @@ const SORT_OPTIONS = [
   { value: 'volume', label: '成交量↓' },
 ];
 let sortBy = savedFilterSettings.sortBy || 'score';
+
+const CHART_RANGE_OPTIONS = [
+  { value: '12h', label: '12H', limits: { ratio: 12, oi: 6, taker: 144 } },
+  { value: '1d', label: '1D', limits: { ratio: 24, oi: 6, taker: 288 } },
+  { value: '3d', label: '3D', limits: { ratio: 72, oi: 18, taker: 288 } },
+  { value: '7d', label: '7D', limits: { ratio: 168, oi: 42, taker: 288 } },
+];
+let chartRange = localStorage.getItem('chartRange') || '3d';
 
 const timeframes = [
   { value: '5m', label: '5分钟' },
@@ -600,7 +625,12 @@ function formatUSDT(n) {
   return '$' + n.toFixed(2);
 }
 function ts2time(ts) {
-  return new Date(ts).toLocaleTimeString('zh-CN', { hour12: false });
+  const d = new Date(ts);
+  const mm = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  const hh = String(d.getHours()).padStart(2, '0');
+  const mi = String(d.getMinutes()).padStart(2, '0');
+  return `${mm}-${dd} ${hh}:${mi}`;
 }
 function ratioClass(r) {
   r = parseFloat(r);
@@ -767,6 +797,31 @@ function drawLineChart(canvas, labels, datasets) {
       lx += ctx.measureText(ds.label).width + 32;
     });
   }
+
+  setupChartHover(canvas, labels, datasets, pad, cw, ch, min, max);
+}
+
+function setupChartHover(canvas, labels, datasets, pad, cw, ch, min, max) {
+  const tooltip = document.getElementById('chartTooltip');
+  const colors = ['#58a6ff', '#3fb950', '#f85149', '#d29922'];
+  canvas.onmousemove = (e) => {
+    const rect = canvas.getBoundingClientRect();
+    const mx = e.clientX - rect.left;
+    if (mx < pad.left || mx > pad.left + cw) { tooltip.classList.remove('show'); return; }
+    const ratio = (mx - pad.left) / cw;
+    const idx = Math.round(ratio * (labels.length - 1));
+    if (idx < 0 || idx >= labels.length) { tooltip.classList.remove('show'); return; }
+    let html = `<div style="margin-bottom:3px;font-weight:500;">${labels[idx]}</div>`;
+    datasets.forEach((ds, di) => {
+      const v = ds.data[idx];
+      if (v != null) html += `<div style="color:${colors[di % colors.length]}">${ds.label}: ${v.toFixed(4)}</div>`;
+    });
+    tooltip.innerHTML = html;
+    tooltip.classList.add('show');
+    tooltip.style.left = (e.clientX + 12) + 'px';
+    tooltip.style.top = (e.clientY - 10) + 'px';
+  };
+  canvas.onmouseleave = () => { tooltip.classList.remove('show'); };
 }
 
 function drawBarChart(canvas, labels, buyData, sellData) {
@@ -818,6 +873,11 @@ function drawBarChart(canvas, labels, buyData, sellData) {
   ctx.fillStyle = '#e6edf3'; ctx.textAlign = 'left'; ctx.fillText('买入', pad.left + 20, pad.top + 8);
   ctx.fillStyle = '#f85149'; ctx.fillRect(pad.left + 56, pad.top + 2, 12, 3);
   ctx.fillStyle = '#e6edf3'; ctx.fillText('卖出', pad.left + 72, pad.top + 8);
+
+  setupChartHover(canvas, labels, [
+    { label: '买入', data: buyData },
+    { label: '卖出', data: sellData }
+  ], pad, cw, ch, 0, max);
 }
 
 function calcRSI(closes, period = 14) {
@@ -1195,7 +1255,8 @@ function renderCharts(data) {
 
 async function fetchData() {
   try {
-    const res = await fetch(`/api/data?symbol=${symbol}`);
+    const rangeOpt = CHART_RANGE_OPTIONS.find(r => r.value === chartRange) || CHART_RANGE_OPTIONS[2];
+    const res = await fetch(`/api/data?symbol=${symbol}&ratioLimit=${rangeOpt.limits.ratio}&oiLimit=${rangeOpt.limits.oi}&takerLimit=${rangeOpt.limits.taker}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     document.getElementById('title').textContent = `${symbol} 聪明钱监控面板`;
@@ -1507,6 +1568,20 @@ const FILTER_DEFS = [
   { id: 'right_side', label: '右侧交易' },
   { id: 'left_side', label: '左侧交易' },
 ];
+
+function renderChartRangeBar() {
+  const group = document.getElementById('chartRangeGroup');
+  if (!group) return;
+  group.innerHTML = CHART_RANGE_OPTIONS.map(r =>
+    `<button class="filter-pill ${chartRange === r.value ? 'active' : ''}" onclick="switchChartRange('${r.value}')">${r.label}</button>`
+  ).join('');
+}
+function switchChartRange(val) {
+  chartRange = val;
+  localStorage.setItem('chartRange', val);
+  renderChartRangeBar();
+  fetchData();
+}
 
 function renderFilterTabs() {
   const el = document.getElementById('filterBar');
@@ -2049,6 +2124,7 @@ window.addEventListener('resize', () => { fetchData(); });
 renderFilterTabs();
 renderCoinTabs();
 renderTFTabs();
+renderChartRangeBar();
 fetchData();
 startCountdown();
 setTimeout(scanRightSideCoins, 2000);
