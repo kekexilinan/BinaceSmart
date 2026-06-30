@@ -34,7 +34,7 @@ async function handleAPI(symbol, { ratioLimit = 72, oiLimit = 42, takerLimit = 4
   const rl = Math.min(500, Math.max(1, parseInt(ratioLimit, 10)));
   const ol = Math.min(500, Math.max(1, parseInt(oiLimit, 10)));
   const tl = Math.min(500, Math.max(1, parseInt(takerLimit, 10)));
-  const [price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate] =
+  const [price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate, fundingRateHist] =
     await Promise.all([
       proxyBinance(`/fapi/v2/ticker/price?symbol=${symbol}`),
       proxyBinance(`/fapi/v1/ticker/24hr?symbol=${symbol}`),
@@ -45,8 +45,9 @@ async function handleAPI(symbol, { ratioLimit = 72, oiLimit = 42, takerLimit = 4
       proxyBinance(`/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=${ol}`),
       proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=${tl}`),
       proxyBinance(`/fapi/v1/premiumIndex?symbol=${symbol}`),
+      proxyBinance(`/fapi/v1/fundingRate?symbol=${symbol}&limit=100`),
     ]);
-  return { price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate };
+  return { price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate, fundingRateHist };
 }
 
 let FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';

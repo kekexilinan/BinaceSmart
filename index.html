@@ -237,6 +237,7 @@
   }
   .chart-card h3 { font-size: 14px; margin-bottom: 12px; color: var(--text2); }
   .chart-card canvas { width: 100% !important; height: 220px !important; cursor: crosshair; }
+  .chart-card canvas.chart-tall { height: 270px !important; }
   .chart-card { position: relative; }
   .chart-tooltip {
     position: fixed; z-index: 9999; pointer-events: none;
@@ -320,6 +321,67 @@
   }
   .backtest-result .stat { display: inline-block; margin-right: 16px; }
   .backtest-result .stat .val { font-weight: 600; font-size: 14px; }
+
+  .sim-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .sim-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .sim-header h3 { font-size: 15px; color: var(--green); margin: 0; }
+  .sim-toggle { font-size: 12px; color: var(--text2); }
+  .sim-tabs { display: flex; gap: 6px; margin: 12px 0; }
+  .sim-status-bar {
+    display: flex; align-items: center; gap: 16px; padding: 10px 14px;
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px; margin-bottom: 12px;
+  }
+  .sim-status-bar .sim-stat { font-size: 12px; }
+  .sim-status-bar .sim-stat .val { font-weight: 600; font-size: 14px; }
+  .sim-running-badge {
+    display: inline-flex; align-items: center; gap: 4px;
+    padding: 3px 10px; border-radius: 12px; font-size: 11px; font-weight: 600;
+  }
+  .sim-running-badge.active { background: rgba(63,185,80,0.15); color: var(--green); }
+  .sim-running-badge.stopped { background: rgba(139,148,158,0.15); color: var(--text2); }
+  .sim-running-badge .dot { width: 6px; height: 6px; border-radius: 50%; }
+  .sim-running-badge.active .dot { background: var(--green); animation: pulse 1.5s infinite; }
+  .sim-running-badge.stopped .dot { background: var(--text2); }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  .sim-config {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+    gap: 10px; margin-bottom: 12px;
+  }
+  .sim-config label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 3px; }
+  .sim-config input, .sim-config select {
+    width: 100%; background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 8px; border-radius: 6px; font-size: 12px;
+  }
+  .sim-btn-start { background: var(--green); color: #fff; border: none; padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .sim-btn-stop { background: var(--red); color: #fff; border: none; padding: 8px 20px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .sim-btn-reset { background: var(--border); color: var(--text); border: none; padding: 8px 16px; border-radius: 6px; font-size: 12px; cursor: pointer; }
+  .sim-positions { margin-top: 12px; }
+  .sim-pos-card {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 10px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 8px; font-size: 12px;
+  }
+  .sim-pos-card .pos-dir { font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px; }
+  .sim-pos-card .pos-dir.long { background: rgba(63,185,80,0.15); color: var(--green); }
+  .sim-pos-card .pos-dir.short { background: rgba(248,81,73,0.15); color: var(--red); }
+  .sim-log {
+    max-height: 300px; overflow-y: auto; margin-top: 12px;
+    border: 1px solid var(--border); border-radius: 8px; background: var(--bg);
+  }
+  .sim-log-item {
+    padding: 6px 12px; border-bottom: 1px solid var(--border); font-size: 11px; display: flex; gap: 8px;
+  }
+  .sim-log-item:last-child { border-bottom: none; }
+  .sim-log-item .log-time { color: var(--text2); min-width: 60px; }
+  .sim-log-item .log-action { font-weight: 600; min-width: 50px; }
+  .sim-log-item.log-open .log-action { color: var(--blue); }
+  .sim-log-item.log-close .log-action { color: var(--yellow); }
+  .sim-log-item.log-tp .log-action { color: var(--green); }
+  .sim-log-item.log-sl .log-action { color: var(--red); }
+  .sim-equity-canvas { width: 100% !important; height: 150px !important; cursor: crosshair; margin-top: 12px; }
 
   .alert-section {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
@@ -433,6 +495,23 @@
     </div>
     <div id="stratEditPanel"></div>
     <div id="stratBacktestPanel" style="display:none;"></div>
+  </div>
+</div>
+
+<div class="sim-section" id="simSection">
+  <div class="sim-header" onclick="toggleSimPanel()">
+    <h3>⚡ 模拟自动交易</h3>
+    <span class="sim-toggle" id="simToggle">展开</span>
+  </div>
+  <div class="sim-body" id="simBody" style="display:none;">
+    <div class="sim-tabs">
+      <button class="filter-pill active" id="simTabDash" onclick="switchSimTab('dash')">交易面板</button>
+      <button class="filter-pill" id="simTabLog" onclick="switchSimTab('log')">交易日志</button>
+      <button class="filter-pill" id="simTabEquity" onclick="switchSimTab('equity')">收益曲线</button>
+    </div>
+    <div id="simDashPanel"></div>
+    <div id="simLogPanel" style="display:none;"></div>
+    <div id="simEquityPanel" style="display:none;"></div>
   </div>
 </div>
 
@@ -897,6 +976,231 @@ function setupChartHover(canvas, labels, datasets, pad, cw, ch, min, max) {
   canvas.onmouseleave = () => { tooltip.classList.remove('show'); };
 }
 
+function drawDualAxisChart(canvas, labels, lineData, barData, opts = {}) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 14, right: 56, bottom: 28, left: 52 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const lMin = Math.min(...lineData.data) * 0.98;
+  const lMax = Math.max(...lineData.data) * 1.02;
+  const lRange = lMax - lMin || 1;
+
+  const barAbs = barData.data.map(Math.abs);
+  const bMax = Math.max(...barAbs) * 1.1 || 1;
+
+  const mainChH = opts.secondLine ? ch * 0.7 : ch;
+  const toLineY = v => pad.top + mainChH * (1 - (v - lMin) / lRange);
+  const toBarH = v => (Math.abs(v) / bMax) * (ch * 0.3);
+
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (mainChH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+  }
+
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (mainChH / 4) * i;
+    const val = lMax - (lMax - lMin) * (i / 4);
+    ctx.textAlign = 'right';
+    ctx.fillText(opts.leftFormat ? opts.leftFormat(val) : val.toFixed(2), pad.left - 4, y + 3);
+  }
+
+  // Right axis for secondary line (price)
+  if (opts.secondLine) {
+    const s2Min = Math.min(...opts.secondLine.data) * 0.998;
+    const s2Max = Math.max(...opts.secondLine.data) * 1.002;
+    const s2Range = s2Max - s2Min || 1;
+    const toS2Y = v => pad.top + mainChH * (1 - (v - s2Min) / s2Range);
+
+    ctx.fillStyle = 'rgba(210,153,34,0.7)'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+    for (let i = 0; i <= 4; i++) {
+      const val = s2Max - (s2Max - s2Min) * (i / 4);
+      const y = pad.top + (mainChH / 4) * i;
+      const dec = val < 1 ? 5 : val < 100 ? 3 : 1;
+      ctx.fillText(val.toFixed(dec), W - pad.right + 4, y + 3);
+    }
+
+    ctx.strokeStyle = 'rgba(210,153,34,0.65)'; ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    opts.secondLine.data.forEach((v, i) => {
+      const x = pad.left + (cw / (opts.secondLine.data.length - 1)) * i;
+      const y = toS2Y(v);
+      i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+    });
+    ctx.stroke();
+
+    const s2LastX = pad.left + cw;
+    const s2LastY = toS2Y(opts.secondLine.data[opts.secondLine.data.length - 1]);
+    ctx.fillStyle = 'rgba(210,153,34,0.8)';
+    ctx.beginPath(); ctx.arc(s2LastX, s2LastY, 3, 0, Math.PI * 2); ctx.fill();
+  }
+
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(labels.length / 6));
+  for (let i = 0; i < labels.length; i += step) {
+    const x = pad.left + (cw / (labels.length - 1)) * i;
+    ctx.fillText(labels[i], x, H - 6);
+  }
+
+  // Change rate bars at bottom
+  const barW = Math.max(2, (cw / labels.length) * 0.6);
+  const barBase = pad.top + ch * 0.85;
+  barData.data.forEach((v, i) => {
+    const x = pad.left + (cw / (labels.length - 1)) * i;
+    const h = toBarH(v);
+    ctx.fillStyle = v >= 0 ? 'rgba(63,185,80,0.5)' : 'rgba(248,81,73,0.5)';
+    if (v >= 0) {
+      ctx.fillRect(x - barW / 2, barBase - h, barW, h);
+    } else {
+      ctx.fillRect(x - barW / 2, barBase, barW, h);
+    }
+  });
+
+  ctx.strokeStyle = 'rgba(128,128,128,0.3)'; ctx.lineWidth = 0.5; ctx.setLineDash([3, 3]);
+  ctx.beginPath(); ctx.moveTo(pad.left, barBase); ctx.lineTo(W - pad.right, barBase); ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Primary line (OI)
+  ctx.strokeStyle = opts.lineColor || '#58a6ff'; ctx.lineWidth = 2;
+  ctx.beginPath();
+  lineData.data.forEach((v, i) => {
+    const x = pad.left + (cw / (lineData.data.length - 1)) * i;
+    const y = toLineY(v);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  const lastX = pad.left + cw;
+  const lastY2 = toLineY(lineData.data[lineData.data.length - 1]);
+  ctx.fillStyle = opts.lineColor || '#58a6ff';
+  ctx.beginPath(); ctx.arc(lastX, lastY2, 4, 0, Math.PI * 2); ctx.fill();
+
+  // Legend
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  let lx = pad.left + 4;
+  ctx.fillStyle = opts.lineColor || '#58a6ff';
+  ctx.fillRect(lx, pad.top + 2, 12, 3);
+  ctx.fillStyle = '#e6edf3';
+  ctx.fillText(lineData.label, lx + 16, pad.top + 8);
+  lx += ctx.measureText(lineData.label).width + 28;
+  if (opts.secondLine) {
+    ctx.fillStyle = 'rgba(210,153,34,0.8)';
+    ctx.fillRect(lx, pad.top + 2, 12, 3);
+    ctx.fillStyle = '#e6edf3';
+    ctx.fillText(opts.secondLine.label, lx + 16, pad.top + 8);
+    lx += ctx.measureText(opts.secondLine.label).width + 28;
+  }
+  ctx.fillStyle = 'rgba(63,185,80,0.7)';
+  ctx.fillRect(lx, pad.top + 1, 8, 5);
+  ctx.fillStyle = '#e6edf3';
+  ctx.fillText(barData.label, lx + 12, pad.top + 8);
+
+  const hoverDatasets = [lineData, { label: barData.label, data: barData.data.map(v => v * 100) }];
+  if (opts.secondLine) hoverDatasets.push(opts.secondLine);
+  setupChartHover(canvas, labels, hoverDatasets, pad, cw, ch, lMin, lMax);
+}
+
+function drawFundingRateChart(canvas, labels, rates) {
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 14, right: 52, bottom: 28, left: 52 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const absMax = Math.max(...rates.map(Math.abs), 0.0005) * 1.3;
+  const midY = pad.top + ch / 2;
+  const scale = (ch / 2) / absMax;
+
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+    const val = absMax - (absMax * 2) * (i / 4);
+    ctx.fillText((val * 100).toFixed(3) + '%', pad.left - 4, y + 3);
+  }
+
+  ctx.strokeStyle = '#f0883e'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(pad.left, midY); ctx.lineTo(W - pad.right, midY); ctx.stroke();
+  ctx.setLineDash([]);
+
+  const barW = Math.max(3, (cw / rates.length) * 0.7);
+  rates.forEach((r, i) => {
+    const x = pad.left + (cw / (rates.length - 1)) * i;
+    const h = Math.abs(r) * scale;
+    if (r >= 0) {
+      const intensity = Math.min(1, Math.abs(r) / 0.001);
+      ctx.fillStyle = `rgba(248,81,73,${0.3 + intensity * 0.5})`;
+      ctx.fillRect(x - barW / 2, midY - h, barW, h);
+    } else {
+      const intensity = Math.min(1, Math.abs(r) / 0.001);
+      ctx.fillStyle = `rgba(63,185,80,${0.3 + intensity * 0.5})`;
+      ctx.fillRect(x - barW / 2, midY, barW, h);
+    }
+  });
+
+  let cumul = 0;
+  const cumulData = rates.map(r => { cumul += r; return cumul; });
+  const cMin = Math.min(...cumulData, 0);
+  const cMax = Math.max(...cumulData, 0);
+  const cRange = cMax - cMin || 0.001;
+  const toCY = v => pad.top + ch * 0.1 + (ch * 0.8) * (1 - (v - cMin) / cRange);
+
+  ctx.strokeStyle = 'rgba(210,153,34,0.7)'; ctx.lineWidth = 1.5;
+  ctx.beginPath();
+  cumulData.forEach((v, i) => {
+    const x = pad.left + (cw / (cumulData.length - 1)) * i;
+    i === 0 ? ctx.moveTo(x, toCY(v)) : ctx.lineTo(x, toCY(v));
+  });
+  ctx.stroke();
+
+  ctx.textAlign = 'left'; ctx.fillStyle = 'rgba(210,153,34,0.8)'; ctx.font = '10px sans-serif';
+  ctx.fillText(`累计 ${(cumul * 100).toFixed(3)}%`, W - pad.right + 4, toCY(cumul) + 3);
+
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'center';
+  const step = Math.max(1, Math.floor(labels.length / 6));
+  for (let i = 0; i < labels.length; i += step) {
+    const x = pad.left + (cw / (labels.length - 1)) * i;
+    ctx.fillText(labels[i], x, H - 6);
+  }
+
+  ctx.font = '11px sans-serif'; ctx.textAlign = 'left';
+  let lx = pad.left + 4;
+  ctx.fillStyle = 'rgba(248,81,73,0.7)';
+  ctx.fillRect(lx, pad.top + 1, 8, 5);
+  ctx.fillStyle = '#e6edf3';
+  ctx.fillText('正费率(多付空)', lx + 12, pad.top + 8);
+  lx += 100;
+  ctx.fillStyle = 'rgba(63,185,80,0.7)';
+  ctx.fillRect(lx, pad.top + 1, 8, 5);
+  ctx.fillStyle = '#e6edf3';
+  ctx.fillText('负费率(空付多)', lx + 12, pad.top + 8);
+  lx += 100;
+  ctx.fillStyle = 'rgba(210,153,34,0.7)';
+  ctx.fillRect(lx, pad.top + 1, 12, 3);
+  ctx.fillStyle = '#e6edf3';
+  ctx.fillText('累计费率', lx + 16, pad.top + 8);
+
+  setupChartHover(canvas, labels,
+    [{ label: '费率', data: rates.map(r => r * 100) }, { label: '累计', data: cumulData.map(v => v * 100) }],
+    pad, cw, ch, -absMax * 100, absMax * 100);
+}
+
 function drawBarChart(canvas, labels, buyData, sellData, ratioData) {
   const ctx = canvas.getContext('2d');
   const dpr = window.devicePixelRatio || 1;
@@ -1169,6 +1473,43 @@ function drawCandlestick(canvas, klines, tf) {
   ctx.fillRect(W - pad.right, lastY - 8, 56, 16);
   ctx.fillStyle = '#fff'; ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText(lastPrice.toFixed(decimals), W - pad.right + 4, lastY + 3);
+
+  // Funding rate annotations on K-line chart
+  const sd = window._lastSmartData;
+  if (sd && sd.fundingRateHist && sd.fundingRateHist.length > 0) {
+    const kStart = klines[0].openTime;
+    const kEnd = klines[klines.length - 1].openTime;
+    const tfMs = klines.length > 1 ? klines[1].openTime - klines[0].openTime : 3600000;
+    const frEvents = sd.fundingRateHist.filter(f => {
+      const ft = f.fundingTime;
+      return ft >= kStart && ft <= kEnd + tfMs;
+    });
+
+    frEvents.forEach(f => {
+      const rate = parseFloat(f.fundingRate);
+      if (Math.abs(rate) < 0.0003) return;
+      const ft = f.fundingTime;
+      const kIdx = klines.findIndex((k, i) => {
+        const nextT = i < klines.length - 1 ? klines[i + 1].openTime : k.openTime + tfMs;
+        return ft >= k.openTime && ft < nextT;
+      });
+      if (kIdx < 0) return;
+      const x = pad.left + gap * kIdx + gap / 2;
+      const isHigh = rate > 0;
+      const markerY = isHigh ? pad.top + 2 : pad.top + 14;
+      ctx.fillStyle = isHigh ? 'rgba(248,81,73,0.75)' : 'rgba(63,185,80,0.75)';
+      ctx.beginPath();
+      if (isHigh) {
+        ctx.moveTo(x, markerY + 8); ctx.lineTo(x - 4, markerY); ctx.lineTo(x + 4, markerY);
+      } else {
+        ctx.moveTo(x, markerY); ctx.lineTo(x - 4, markerY + 8); ctx.lineTo(x + 4, markerY + 8);
+      }
+      ctx.closePath(); ctx.fill();
+      ctx.fillStyle = isHigh ? '#f85149' : '#3fb950';
+      ctx.font = '8px sans-serif'; ctx.textAlign = 'center';
+      ctx.fillText((rate * 100).toFixed(2) + '%', x, isHigh ? markerY + 18 : markerY - 2);
+    });
+  }
 }
 
 function drawRSIChart(canvas, rsiLines, klines, tf) {
@@ -1512,8 +1853,12 @@ function renderCharts(data) {
       <canvas id="c-accounts"></canvas>
     </div>
     <div class="chart-card">
-      <h3>持仓量 (OI) 变化</h3>
-      <canvas id="c-oi"></canvas>
+      <h3>持仓量 (OI) + 价格对比</h3>
+      <canvas id="c-oi" class="chart-tall"></canvas>
+    </div>
+    <div class="chart-card">
+      <h3>资金费率趋势</h3>
+      <canvas id="c-funding" class="chart-tall"></canvas>
     </div>
     <div class="chart-card">
       <h3>主动买卖量 (5min)</h3>
@@ -1568,12 +1913,38 @@ function renderCharts(data) {
       ]
     );
 
-    // OI chart
-    drawLineChart(
+    // OI chart with change rate + price overlay
+    const oiValues = data.oiHist.map(d => parseFloat(d.sumOpenInterestValue));
+    const oiChanges = oiValues.map((v, i) => i === 0 ? 0 : (v - oiValues[i - 1]) / oiValues[i - 1]);
+    const oiPrices = data.oiHist.map(d => {
+      const oi = parseFloat(d.sumOpenInterest);
+      const val = parseFloat(d.sumOpenInterestValue);
+      return oi > 0 ? val / oi : 0;
+    });
+    drawDualAxisChart(
       document.getElementById('c-oi'),
       data.oiHist.map(d => ts2time(d.timestamp)),
-      [{ label: 'OI (USDT)', data: data.oiHist.map(d => parseFloat(d.sumOpenInterestValue)) }]
+      { label: 'OI (USDT)', data: oiValues },
+      { label: 'OI变化率', data: oiChanges },
+      {
+        lineColor: '#58a6ff',
+        leftFormat: v => v >= 1e9 ? (v / 1e9).toFixed(1) + 'B' : (v / 1e6).toFixed(1) + 'M',
+        secondLine: { label: '价格', data: oiPrices }
+      }
     );
+
+    // Funding rate history chart
+    if (data.fundingRateHist && data.fundingRateHist.length > 0) {
+      const frHist = data.fundingRateHist.slice(-60);
+      drawFundingRateChart(
+        document.getElementById('c-funding'),
+        frHist.map(d => {
+          const t = new Date(d.fundingTime);
+          return `${(t.getMonth()+1).toString().padStart(2,'0')}/${t.getDate().toString().padStart(2,'0')} ${t.getHours().toString().padStart(2,'0')}:00`;
+        }),
+        frHist.map(d => parseFloat(d.fundingRate))
+      );
+    }
 
     // Taker volume bar chart with ratio overlay
     drawBarChart(
@@ -3278,6 +3649,639 @@ function calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines) {
 }
 
 // ===== End 策略管理 =====
+
+// ===== 模拟自动交易 =====
+const SIM_STORAGE_KEY = 'sim_trading_state';
+const SIM_LOG_KEY = 'sim_trading_log';
+
+const defaultSimConfig = {
+  balance: 10000,
+  leverage: 10,
+  positionPct: 10,
+  maxPositions: 3,
+  scoreThreshold: 4,
+  stopLossPct: 2,
+  takeProfitPct: 4,
+  trailingStop: false,
+  trailingPct: 1.5,
+  cooldownMin: 5,
+  watchlist: [],
+  notifyFeishu: true,
+};
+
+let simState = loadSimState();
+let simRunning = false;
+let simTimer = null;
+
+function loadSimState() {
+  try {
+    const saved = localStorage.getItem(SIM_STORAGE_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return {
+    config: { ...defaultSimConfig },
+    balance: defaultSimConfig.balance,
+    initialBalance: defaultSimConfig.balance,
+    positions: [],
+    closedTrades: [],
+    equityHistory: [],
+    lastSignalTime: 0,
+    totalTrades: 0,
+    wins: 0,
+  };
+}
+
+function saveSimState() {
+  try { localStorage.setItem(SIM_STORAGE_KEY, JSON.stringify(simState)); } catch (e) {}
+}
+
+function loadSimLog() {
+  try {
+    const saved = localStorage.getItem(SIM_LOG_KEY);
+    if (saved) return JSON.parse(saved);
+  } catch (e) {}
+  return [];
+}
+
+function saveSimLog(log) {
+  try {
+    const trimmed = log.slice(-200);
+    localStorage.setItem(SIM_LOG_KEY, JSON.stringify(trimmed));
+  } catch (e) {}
+}
+
+function addSimLog(type, msg) {
+  const log = loadSimLog();
+  log.push({ time: Date.now(), type, msg });
+  saveSimLog(log);
+}
+
+function toggleSimPanel() {
+  const body = document.getElementById('simBody');
+  const toggle = document.getElementById('simToggle');
+  if (body.style.display === 'none') {
+    body.style.display = 'block';
+    toggle.textContent = '收起';
+    renderSimDashPanel();
+  } else {
+    body.style.display = 'none';
+    toggle.textContent = '展开';
+  }
+}
+
+function switchSimTab(tab) {
+  document.getElementById('simTabDash').classList.toggle('active', tab === 'dash');
+  document.getElementById('simTabLog').classList.toggle('active', tab === 'log');
+  document.getElementById('simTabEquity').classList.toggle('active', tab === 'equity');
+  document.getElementById('simDashPanel').style.display = tab === 'dash' ? 'block' : 'none';
+  document.getElementById('simLogPanel').style.display = tab === 'log' ? 'block' : 'none';
+  document.getElementById('simEquityPanel').style.display = tab === 'equity' ? 'block' : 'none';
+  if (tab === 'dash') renderSimDashPanel();
+  if (tab === 'log') renderSimLogPanel();
+  if (tab === 'equity') renderSimEquityPanel();
+}
+
+function renderSimDashPanel() {
+  const el = document.getElementById('simDashPanel');
+  const cfg = simState.config;
+  const pnl = simState.balance - simState.initialBalance;
+  const pnlPct = (pnl / simState.initialBalance * 100);
+  const winRate = simState.totalTrades > 0 ? (simState.wins / simState.totalTrades * 100).toFixed(1) : '--';
+  const unrealizedPnl = calcUnrealizedPnl();
+
+  el.innerHTML = `
+    <div class="sim-status-bar">
+      <span class="sim-running-badge ${simRunning ? 'active' : 'stopped'}">
+        <span class="dot"></span> ${simRunning ? '运行中' : '已停止'}
+      </span>
+      <span class="sim-stat">余额 <span class="val">$${simState.balance.toFixed(2)}</span></span>
+      <span class="sim-stat">收益 <span class="val" style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%)</span></span>
+      <span class="sim-stat">浮盈 <span class="val" style="color:${unrealizedPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}</span></span>
+      <span class="sim-stat">胜率 <span class="val">${winRate}%</span></span>
+      <span class="sim-stat">交易 <span class="val">${simState.totalTrades}</span></span>
+    </div>
+    <div class="sim-config">
+      <div><label>初始资金 (USDT)</label><input id="simBalance" type="number" value="${cfg.balance}" min="100"></div>
+      <div><label>杠杆倍数</label><input id="simLeverage" type="number" value="${cfg.leverage}" min="1" max="125"></div>
+      <div><label>单笔仓位 (%余额)</label><input id="simPosPct" type="number" value="${cfg.positionPct}" min="1" max="100"></div>
+      <div><label>最大持仓数</label><input id="simMaxPos" type="number" value="${cfg.maxPositions}" min="1" max="20"></div>
+      <div><label>信号阈值 (评分≥)</label><input id="simThreshold" type="number" value="${cfg.scoreThreshold}" min="1" max="20"></div>
+      <div><label>止损 (%)</label><input id="simSL" type="number" value="${cfg.stopLossPct}" min="0.1" max="50" step="0.1"></div>
+      <div><label>止盈 (%)</label><input id="simTP" type="number" value="${cfg.takeProfitPct}" min="0.1" max="100" step="0.1"></div>
+      <div><label>冷却时间 (分钟)</label><input id="simCooldown" type="number" value="${cfg.cooldownMin}" min="1" max="60"></div>
+    </div>
+    <div style="margin-bottom:12px;">
+      <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">监控币种（逗号分隔，空=当前币种）</label>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input id="simWatchlist" value="${(cfg.watchlist || []).join(',')}" placeholder="BTC,ETH,SOL,BNB..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;">
+        <button onclick="fillSimWatchlist()" style="background:var(--border);border:none;color:var(--text);padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap;">填充Top10</button>
+      </div>
+    </div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+      ${simRunning
+        ? '<button class="sim-btn-stop" onclick="stopSimTrading()">停止交易</button>'
+        : '<button class="sim-btn-start" onclick="startSimTrading()">启动自动交易</button>'
+      }
+      <button class="sim-btn-reset" onclick="resetSimTrading()">重置数据</button>
+      <button class="sim-btn-reset" onclick="manualCloseAll()">全部平仓</button>
+      <label style="font-size:11px;color:var(--text2);cursor:pointer;display:flex;align-items:center;gap:3px;margin-left:8px;">
+        <input type="checkbox" id="simNotifyFeishu" ${simState.config.notifyFeishu !== false ? 'checked' : ''}> 飞书通知
+      </label>
+      <span style="font-size:11px;color:var(--text2);margin-left:auto;">监控: ${
+        (simState.config.watchlist && simState.config.watchlist.length > 0)
+          ? simState.config.watchlist.map(s => s.replace('USDT','')).join(', ')
+          : symbol.replace('USDT','')
+      } (${(simState.config.watchlist && simState.config.watchlist.length) || 1}币种)</span>
+    </div>
+    <div class="sim-positions" id="simPositions">
+      ${renderPositionCards()}
+    </div>
+  `;
+}
+
+function renderPositionCards() {
+  if (simState.positions.length === 0) {
+    return '<div style="padding:12px;text-align:center;color:var(--text2);font-size:12px;">暂无持仓</div>';
+  }
+  return simState.positions.map((pos, idx) => {
+    const curPrice = _simPriceCache[pos.symbol] || 0;
+    const pnl = calcPosPnl(pos, curPrice);
+    const pnlPct = (pnl / (pos.margin)) * 100;
+    return `<div class="sim-pos-card">
+      <span><span class="pos-dir ${pos.direction}">${pos.direction === 'long' ? '做多' : '做空'}</span> ${pos.symbol}</span>
+      <span>开仓 $${pos.entryPrice.toFixed(pos.entryPrice < 1 ? 6 : 2)}</span>
+      <span>数量 ${pos.qty.toFixed(4)}</span>
+      <span>杠杆 ${pos.leverage}x</span>
+      <span style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)} (${pnlPct.toFixed(1)}%)</span>
+      <span>TP $${pos.tp.toFixed(pos.tp < 1 ? 6 : 2)} / SL $${pos.sl.toFixed(pos.sl < 1 ? 6 : 2)}</span>
+      <button onclick="manualClosePos(${idx})" style="background:var(--border);border:none;color:var(--text);padding:3px 8px;border-radius:4px;font-size:11px;cursor:pointer;">平仓</button>
+    </div>`;
+  }).join('');
+}
+
+function calcPosPnl(pos, curPrice) {
+  if (!curPrice) return 0;
+  if (pos.direction === 'long') {
+    return (curPrice - pos.entryPrice) * pos.qty;
+  } else {
+    return (pos.entryPrice - curPrice) * pos.qty;
+  }
+}
+
+let _simPriceCache = {};
+
+function calcUnrealizedPnl() {
+  const sd = window._lastSmartData;
+  if (sd && sd.price) _simPriceCache[symbol] = parseFloat(sd.price.price);
+  return simState.positions.reduce((sum, pos) => {
+    const price = _simPriceCache[pos.symbol] || 0;
+    return sum + calcPosPnl(pos, price);
+  }, 0);
+}
+
+function startSimTrading() {
+  const cfg = simState.config;
+  cfg.balance = parseFloat(document.getElementById('simBalance').value) || 10000;
+  cfg.leverage = parseInt(document.getElementById('simLeverage').value) || 10;
+  cfg.positionPct = parseFloat(document.getElementById('simPosPct').value) || 10;
+  cfg.maxPositions = parseInt(document.getElementById('simMaxPos').value) || 3;
+  cfg.scoreThreshold = parseInt(document.getElementById('simThreshold').value) || 4;
+  cfg.stopLossPct = parseFloat(document.getElementById('simSL').value) || 2;
+  cfg.takeProfitPct = parseFloat(document.getElementById('simTP').value) || 4;
+  cfg.cooldownMin = parseInt(document.getElementById('simCooldown').value) || 5;
+  cfg.notifyFeishu = document.getElementById('simNotifyFeishu')?.checked !== false;
+  const wlInput = document.getElementById('simWatchlist').value.trim();
+  cfg.watchlist = wlInput ? wlInput.split(/[,，\s]+/).map(s => s.toUpperCase().replace(/USDT$/, '') + 'USDT') : [];
+
+  if (simState.totalTrades === 0 && simState.positions.length === 0) {
+    simState.balance = cfg.balance;
+    simState.initialBalance = cfg.balance;
+  }
+
+  simRunning = true;
+  addSimLog('system', `启动自动交易 | 余额 $${simState.balance.toFixed(2)} | 杠杆 ${cfg.leverage}x | 阈值 ${cfg.scoreThreshold}`);
+  saveSimState();
+  renderSimDashPanel();
+  runSimCycle();
+}
+
+function stopSimTrading() {
+  simRunning = false;
+  if (simTimer) { clearTimeout(simTimer); simTimer = null; }
+  addSimLog('system', '停止自动交易');
+  saveSimState();
+  renderSimDashPanel();
+}
+
+function resetSimTrading() {
+  if (!confirm('确认重置所有模拟交易数据？')) return;
+  stopSimTrading();
+  simState = {
+    config: { ...defaultSimConfig },
+    balance: defaultSimConfig.balance,
+    initialBalance: defaultSimConfig.balance,
+    positions: [],
+    closedTrades: [],
+    equityHistory: [],
+    lastSignalTime: 0,
+    totalTrades: 0,
+    wins: 0,
+  };
+  localStorage.removeItem(SIM_LOG_KEY);
+  saveSimState();
+  renderSimDashPanel();
+}
+
+function manualCloseAll() {
+  const sd = window._lastSmartData;
+  const curPrice = sd ? parseFloat(sd.price.price) : 0;
+  if (!curPrice || simState.positions.length === 0) return;
+  [...simState.positions].forEach((_, i) => closePosition(0, curPrice, 'manual'));
+  saveSimState();
+  renderSimDashPanel();
+}
+
+function manualClosePos(idx) {
+  const sd = window._lastSmartData;
+  const curPrice = sd ? parseFloat(sd.price.price) : 0;
+  if (!curPrice) return;
+  closePosition(idx, curPrice, 'manual');
+  saveSimState();
+  renderSimDashPanel();
+}
+
+function closePosition(idx, price, reason) {
+  const pos = simState.positions[idx];
+  if (!pos) return;
+  const pnl = calcPosPnl(pos, price);
+  simState.balance += pos.margin + pnl;
+  simState.totalTrades++;
+  if (pnl > 0) simState.wins++;
+  simState.closedTrades.push({
+    ...pos,
+    exitPrice: price,
+    exitTime: Date.now(),
+    pnl,
+    reason,
+  });
+  if (simState.closedTrades.length > 500) simState.closedTrades = simState.closedTrades.slice(-500);
+  simState.positions.splice(idx, 1);
+
+  const reasonLabel = { tp: '止盈', sl: '止损', manual: '手动', signal: '反向信号' }[reason] || reason;
+  const logMsg = `平仓 ${pos.direction === 'long' ? '多' : '空'} ${pos.symbol} @ $${price.toFixed(pos.entryPrice < 1 ? 6 : 2)} | ${reasonLabel} | PnL ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}`;
+  addSimLog(reason === 'tp' ? 'tp' : reason === 'sl' ? 'sl' : 'close', logMsg);
+
+  notifySimTrade('平仓', `${pos.direction === 'long' ? '🟢多' : '🔴空'} ${pos.symbol}`,
+    `价格: $${price.toFixed(pos.entryPrice < 1 ? 6 : 2)}\n原因: ${reasonLabel}\n盈亏: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}\n余额: $${simState.balance.toFixed(2)}`);
+}
+
+function openPosition(direction, price, sym) {
+  const cfg = simState.config;
+  const margin = simState.balance * (cfg.positionPct / 100);
+  if (margin < 1 || margin > simState.balance) return;
+
+  const qty = (margin * cfg.leverage) / price;
+  const slDist = price * (cfg.stopLossPct / 100);
+  const tpDist = price * (cfg.takeProfitPct / 100);
+
+  const pos = {
+    symbol: sym,
+    direction,
+    entryPrice: price,
+    qty,
+    margin,
+    leverage: cfg.leverage,
+    openTime: Date.now(),
+    sl: direction === 'long' ? price - slDist : price + slDist,
+    tp: direction === 'long' ? price + tpDist : price - tpDist,
+    highWater: price,
+  };
+
+  simState.balance -= margin;
+  simState.positions.push(pos);
+  simState.lastSignalTime = Date.now();
+
+  const dec = price < 1 ? 6 : 2;
+  addSimLog('open', `开仓 ${direction === 'long' ? '做多' : '做空'} ${sym} @ $${price.toFixed(dec)} | 数量 ${qty.toFixed(4)} | 保证金 $${margin.toFixed(2)} | SL $${pos.sl.toFixed(dec)} TP $${pos.tp.toFixed(dec)}`);
+
+  notifySimTrade('开仓', `${direction === 'long' ? '🟢做多' : '🔴做空'} ${sym}`,
+    `价格: $${price.toFixed(dec)}\n数量: ${qty.toFixed(4)}\n杠杆: ${cfg.leverage}x\n保证金: $${margin.toFixed(2)}\n止损: $${pos.sl.toFixed(dec)}\n止盈: $${pos.tp.toFixed(dec)}`);
+}
+
+function notifySimTrade(action, title, detail) {
+  const checkbox = document.getElementById('simNotifyFeishu');
+  if (checkbox && !checkbox.checked) return;
+  const fullTitle = `[模拟交易] ${action} ${title}`;
+  const content = `**${action}通知**\n${detail}\n\n_${new Date().toLocaleString('zh-CN')}_`;
+  try {
+    fetch('/api/feishu-alert', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ title: fullTitle, content }),
+    });
+  } catch (e) { console.error('Sim notify error:', e); }
+}
+
+async function runSimCycle() {
+  if (!simRunning) return;
+
+  try {
+    const watchlist = simState.config.watchlist && simState.config.watchlist.length > 0
+      ? simState.config.watchlist
+      : [symbol];
+
+    // Process each coin in watchlist
+    for (const sym of watchlist) {
+      if (!simRunning) break;
+      await processSimCoin(sym);
+    }
+
+    // Record equity
+    const equity = simState.balance + calcUnrealizedPnl();
+    simState.equityHistory.push({ time: Date.now(), equity });
+    if (simState.equityHistory.length > 1000) simState.equityHistory = simState.equityHistory.slice(-1000);
+
+    saveSimState();
+    if (document.getElementById('simBody').style.display !== 'none') {
+      renderSimDashPanel();
+    }
+  } catch (e) {
+    console.error('SimCycle error:', e);
+  }
+
+  scheduleNext();
+}
+
+async function processSimCoin(sym) {
+  let coinData, coinKlines;
+
+  if (sym === symbol && window._lastSmartData) {
+    coinData = window._lastSmartData;
+    coinKlines = lastKlines;
+  } else {
+    try {
+      const [dataRes, klineRes] = await Promise.all([
+        fetch(`/api/data?symbol=${sym}&ratioLimit=24&oiLimit=12&takerLimit=24`),
+        fetch(`/api/klines?symbol=${sym}&interval=${currentTF}&limit=100`),
+      ]);
+      coinData = await dataRes.json();
+      if (coinData.error) return;
+      const rawK = await klineRes.json();
+      if (rawK.error) return;
+      coinKlines = rawK.map(k => ({
+        openTime: k[0], open: parseFloat(k[1]), high: parseFloat(k[2]),
+        low: parseFloat(k[3]), close: parseFloat(k[4]), volume: parseFloat(k[5]),
+      }));
+    } catch (e) { return; }
+  }
+
+  if (!coinData || !coinData.price || !coinKlines || coinKlines.length < 30) return;
+
+  const curPrice = parseFloat(coinData.price.price);
+  if (!curPrice) return;
+  _simPriceCache[sym] = curPrice;
+
+  // Check TP/SL for existing positions of this coin
+  for (let i = simState.positions.length - 1; i >= 0; i--) {
+    const pos = simState.positions[i];
+    if (pos.symbol !== sym) continue;
+
+    if (pos.direction === 'long') {
+      if (curPrice >= pos.tp) { closePosition(i, pos.tp, 'tp'); continue; }
+      if (curPrice <= pos.sl) { closePosition(i, pos.sl, 'sl'); continue; }
+      if (simState.config.trailingStop && curPrice > pos.highWater) {
+        pos.highWater = curPrice;
+        const newSL = curPrice * (1 - simState.config.trailingPct / 100);
+        if (newSL > pos.sl) pos.sl = newSL;
+      }
+    } else {
+      if (curPrice <= pos.tp) { closePosition(i, pos.tp, 'tp'); continue; }
+      if (curPrice >= pos.sl) { closePosition(i, pos.sl, 'sl'); continue; }
+      if (simState.config.trailingStop && curPrice < pos.highWater) {
+        pos.highWater = curPrice;
+        const newSL = curPrice * (1 + simState.config.trailingPct / 100);
+        if (newSL < pos.sl) pos.sl = newSL;
+      }
+    }
+  }
+
+  // Check cooldown
+  const elapsed = Date.now() - simState.lastSignalTime;
+  const cooldownMs = simState.config.cooldownMin * 60 * 1000;
+  if (elapsed < cooldownMs) return;
+
+  // Check max positions (global)
+  if (simState.positions.length >= simState.config.maxPositions) return;
+
+  // Get strategy score
+  const score = getSimSignal(coinData, coinKlines);
+  const threshold = simState.config.scoreThreshold;
+  const myPositions = simState.positions.filter(p => p.symbol === sym);
+
+  if (score.long >= threshold && !myPositions.some(p => p.direction === 'long')) {
+    if (myPositions.some(p => p.direction === 'short')) {
+      const idx = simState.positions.findIndex(p => p.symbol === sym && p.direction === 'short');
+      if (idx >= 0) closePosition(idx, curPrice, 'signal');
+    }
+    openPosition('long', curPrice, sym);
+  } else if (score.short >= threshold && !myPositions.some(p => p.direction === 'short')) {
+    if (myPositions.some(p => p.direction === 'long')) {
+      const idx = simState.positions.findIndex(p => p.symbol === sym && p.direction === 'long');
+      if (idx >= 0) closePosition(idx, curPrice, 'signal');
+    }
+    openPosition('short', curPrice, sym);
+  }
+}
+
+function scheduleNext() {
+  if (!simRunning) return;
+  const coinCount = (simState.config.watchlist || []).length || 1;
+  const delay = Math.max(10000, coinCount * 3000);
+  simTimer = setTimeout(runSimCycle, delay);
+}
+
+function getSimSignal(data, klines) {
+  if (!klines || klines.length < 30) return { long: 0, short: 0 };
+
+  const closes = klines.map(k => k.close);
+  const i = closes.length - 1;
+  const ma7 = calcMA(closes, 7);
+  const ma25 = calcMA(closes, 25);
+  const rsi = calcRSI(closes, 14);
+  const macdArr = calcMACD(closes);
+  const macd = { dif: macdArr.map(m => m.dif), dea: macdArr.map(m => m.dea), histogram: macdArr.map(m => m.macd) };
+
+  const baseScore = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+
+  let longBoost = 0, shortBoost = 0;
+  if (data.topPositions && data.topPositions.length >= 3) {
+    const posArr = data.topPositions;
+    const latR = parseFloat(posArr[posArr.length - 1].longShortRatio);
+    const prev = posArr.slice(-3).map(d => parseFloat(d.longShortRatio));
+    const trend = prev[2] - prev[0];
+    if (latR > 1.1 && trend > 0.05) longBoost += 1;
+    if (latR < 0.9 && trend < -0.05) shortBoost += 1;
+  }
+  if (data.takerVol && data.takerVol.length >= 3) {
+    const tvArr = data.takerVol;
+    const latBS = parseFloat(tvArr[tvArr.length - 1].buySellRatio);
+    const prev = tvArr.slice(-3).map(d => parseFloat(d.buySellRatio));
+    const trend = prev[2] - prev[0];
+    if (latBS > 1.15 && trend > 0) longBoost += 1;
+    if (latBS < 0.85 && trend < 0) shortBoost += 1;
+  }
+  if (data.fundingRate) {
+    const fr = parseFloat(data.fundingRate.lastFundingRate);
+    if (fr < -0.0005) longBoost += 1;
+    if (fr > 0.001) shortBoost += 1;
+  }
+
+  return {
+    long: baseScore.long + longBoost,
+    short: baseScore.short + shortBoost,
+  };
+}
+
+function fillSimWatchlist() {
+  const top10 = (allTopSymbols || []).slice(0, 10).map(s => s.symbol ? s.symbol.replace('USDT', '') : s.replace('USDT', '')).join(',');
+  document.getElementById('simWatchlist').value = top10 || 'BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,DOT,LINK';
+}
+
+function renderSimLogPanel() {
+  const el = document.getElementById('simLogPanel');
+  const logs = loadSimLog().slice().reverse();
+  if (logs.length === 0) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px;">暂无交易日志</div>';
+    return;
+  }
+  el.innerHTML = `<div class="sim-log">${logs.map(l => {
+    const t = new Date(l.time);
+    const timeStr = `${t.getHours().toString().padStart(2, '0')}:${t.getMinutes().toString().padStart(2, '0')}`;
+    const cls = l.type === 'open' ? 'log-open' : l.type === 'tp' ? 'log-tp' : l.type === 'sl' ? 'log-sl' : 'log-close';
+    const typeLabel = { open: '开仓', close: '平仓', tp: '止盈', sl: '止损', system: '系统', manual: '手动' }[l.type] || l.type;
+    return `<div class="sim-log-item ${cls}">
+      <span class="log-time">${timeStr}</span>
+      <span class="log-action">${typeLabel}</span>
+      <span class="log-msg">${l.msg}</span>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+function renderSimEquityPanel() {
+  const el = document.getElementById('simEquityPanel');
+  const hist = simState.equityHistory;
+  if (hist.length < 2) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px;">数据不足，运行交易后可查看收益曲线</div>';
+    return;
+  }
+
+  const closedPnl = simState.closedTrades.reduce((s, t) => s + t.pnl, 0);
+  const maxEq = Math.max(...hist.map(h => h.equity));
+  const minEq = Math.min(...hist.map(h => h.equity));
+  const drawdown = ((maxEq - minEq) / maxEq * 100).toFixed(2);
+
+  el.innerHTML = `
+    <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;">
+      <span>已实现盈亏: <b style="color:${closedPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${closedPnl >= 0 ? '+' : ''}$${closedPnl.toFixed(2)}</b></span>
+      <span>最大回撤: <b style="color:var(--red);">${drawdown}%</b></span>
+      <span>数据点: <b>${hist.length}</b></span>
+    </div>
+    <canvas class="sim-equity-canvas" id="simEquityCanvas"></canvas>
+    ${simState.closedTrades.length > 0 ? `
+    <div style="margin-top:12px;font-size:12px;color:var(--text2);">最近交易 (${simState.closedTrades.length}笔)</div>
+    <div style="max-height:200px;overflow-y:auto;margin-top:6px;">
+      <table style="font-size:11px;">
+        <tr><th>时间</th><th>方向</th><th>开仓价</th><th>平仓价</th><th>盈亏</th><th>原因</th></tr>
+        ${simState.closedTrades.slice().reverse().slice(0, 50).map(t => {
+          const dec = t.entryPrice < 1 ? 6 : 2;
+          const pnlColor = t.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+          const timeStr = new Date(t.exitTime).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
+          return `<tr>
+            <td>${timeStr}</td>
+            <td class="${t.direction === 'long' ? 'up' : 'down'}">${t.direction === 'long' ? '多' : '空'}</td>
+            <td>$${t.entryPrice.toFixed(dec)}</td>
+            <td>$${t.exitPrice.toFixed(dec)}</td>
+            <td style="color:${pnlColor};">${t.pnl >= 0 ? '+' : ''}$${t.pnl.toFixed(2)}</td>
+            <td>${{ tp: '止盈', sl: '止损', manual: '手动', signal: '反向' }[t.reason] || t.reason}</td>
+          </tr>`;
+        }).join('')}
+      </table>
+    </div>` : ''}
+  `;
+
+  requestAnimationFrame(() => drawSimEquityCurve());
+}
+
+function drawSimEquityCurve() {
+  const canvas = document.getElementById('simEquityCanvas');
+  if (!canvas) return;
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 10, right: 12, bottom: 20, left: 55 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  const hist = simState.equityHistory;
+  if (hist.length < 2) return;
+
+  const values = hist.map(h => h.equity);
+  const initBal = simState.initialBalance;
+  let min = Math.min(...values, initBal) * 0.99;
+  let max = Math.max(...values, initBal) * 1.01;
+  const range = max - min || 1;
+
+  ctx.clearRect(0, 0, W, H);
+
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  ctx.fillStyle = '#8b949e'; ctx.font = '10px sans-serif'; ctx.textAlign = 'right';
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (ch / 4) * i;
+    const val = max - range * (i / 4);
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillText('$' + val.toFixed(0), pad.left - 4, y + 3);
+  }
+
+  // Initial balance line
+  const initY = pad.top + ch * (1 - (initBal - min) / range);
+  ctx.strokeStyle = '#484f58'; ctx.lineWidth = 1; ctx.setLineDash([4, 4]);
+  ctx.beginPath(); ctx.moveTo(pad.left, initY); ctx.lineTo(W - pad.right, initY); ctx.stroke();
+  ctx.setLineDash([]);
+  ctx.fillStyle = '#8b949e'; ctx.font = '9px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('初始', W - pad.right + 2, initY + 3);
+
+  // Equity line
+  ctx.beginPath();
+  values.forEach((v, i) => {
+    const x = pad.left + (cw / (values.length - 1)) * i;
+    const y = pad.top + ch * (1 - (v - min) / range);
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  const lastV = values[values.length - 1];
+  ctx.strokeStyle = lastV >= initBal ? '#3fb950' : '#f85149';
+  ctx.lineWidth = 2; ctx.stroke();
+
+  // Fill below line
+  const lastIdx = values.length - 1;
+  const lastX = pad.left + cw;
+  const lastY = pad.top + ch * (1 - (lastV - min) / range);
+  ctx.lineTo(lastX, pad.top + ch);
+  ctx.lineTo(pad.left, pad.top + ch);
+  ctx.closePath();
+  ctx.fillStyle = lastV >= initBal ? 'rgba(63,185,80,0.08)' : 'rgba(248,81,73,0.08)';
+  ctx.fill();
+
+  // Endpoint
+  ctx.fillStyle = lastV >= initBal ? '#3fb950' : '#f85149';
+  ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2); ctx.fill();
+  ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
+  ctx.fillText('$' + lastV.toFixed(0), lastX + 6, lastY + 3);
+}
+
+// ===== End 模拟自动交易 =====
 
 if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
