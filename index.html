@@ -3771,10 +3771,16 @@ function renderSimDashPanel() {
       <div><label>冷却时间 (分钟)</label><input id="simCooldown" type="number" value="${cfg.cooldownMin}" min="1" max="60"></div>
     </div>
     <div style="margin-bottom:12px;">
-      <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">监控币种（逗号分隔，空=当前币种）</label>
-      <div style="display:flex;gap:6px;align-items:center;">
-        <input id="simWatchlist" value="${(cfg.watchlist || []).join(',')}" placeholder="BTC,ETH,SOL,BNB..." style="flex:1;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;">
-        <button onclick="fillSimWatchlist()" style="background:var(--border);border:none;color:var(--text);padding:5px 10px;border-radius:6px;font-size:11px;cursor:pointer;white-space:nowrap;">填充Top10</button>
+      <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px;">监控币种（逗号分隔，空=当前币种）· 当前 ${(cfg.watchlist || []).length || 0} 个</label>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+        <input id="simWatchlist" value="${(cfg.watchlist || []).map(s=>s.replace('USDT','')).join(',')}" placeholder="BTC,ETH,SOL..." style="flex:1;min-width:200px;background:var(--bg);border:1px solid var(--border);color:var(--text);padding:5px 8px;border-radius:6px;font-size:12px;">
+        <span style="display:flex;gap:4px;">
+          <button onclick="fillSimWatchlistN(10)" style="background:var(--border);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Top10</button>
+          <button onclick="fillSimWatchlistN(20)" style="background:var(--border);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Top20</button>
+          <button onclick="fillSimWatchlistN(50)" style="background:var(--border);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Top50</button>
+          <button onclick="fillSimWatchlistN(100)" style="background:var(--border);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Top100</button>
+          <button onclick="fillSimWatchlistN(200)" style="background:var(--border);border:none;color:var(--text);padding:4px 8px;border-radius:4px;font-size:10px;cursor:pointer;">Top200</button>
+        </span>
       </div>
     </div>
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
@@ -3982,6 +3988,9 @@ function notifySimTrade(action, title, detail) {
   } catch (e) { console.error('Sim notify error:', e); }
 }
 
+let _simBatchIdx = 0;
+const SIM_BATCH_SIZE = 5;
+
 async function runSimCycle() {
   if (!simRunning) return;
 
@@ -3990,8 +3999,29 @@ async function runSimCycle() {
       ? simState.config.watchlist
       : [symbol];
 
-    // Process each coin in watchlist
-    for (const sym of watchlist) {
+    // Process positions TP/SL first (only for coins with cached prices)
+    for (let i = simState.positions.length - 1; i >= 0; i--) {
+      const pos = simState.positions[i];
+      const cp = _simPriceCache[pos.symbol];
+      if (!cp) continue;
+      if (pos.direction === 'long') {
+        if (cp >= pos.tp) { closePosition(i, pos.tp, 'tp'); continue; }
+        if (cp <= pos.sl) { closePosition(i, pos.sl, 'sl'); continue; }
+      } else {
+        if (cp <= pos.tp) { closePosition(i, pos.tp, 'tp'); continue; }
+        if (cp >= pos.sl) { closePosition(i, pos.sl, 'sl'); continue; }
+      }
+    }
+
+    // Batch process: only scan SIM_BATCH_SIZE coins per cycle
+    const batchStart = _simBatchIdx % watchlist.length;
+    const batch = [];
+    for (let j = 0; j < Math.min(SIM_BATCH_SIZE, watchlist.length); j++) {
+      batch.push(watchlist[(batchStart + j) % watchlist.length]);
+    }
+    _simBatchIdx += SIM_BATCH_SIZE;
+
+    for (const sym of batch) {
       if (!simRunning) break;
       await processSimCoin(sym);
     }
@@ -4041,11 +4071,10 @@ async function processSimCoin(sym) {
   if (!curPrice) return;
   _simPriceCache[sym] = curPrice;
 
-  // Check TP/SL for existing positions of this coin
+  // Re-check TP/SL with fresh price + trailing stop
   for (let i = simState.positions.length - 1; i >= 0; i--) {
     const pos = simState.positions[i];
     if (pos.symbol !== sym) continue;
-
     if (pos.direction === 'long') {
       if (curPrice >= pos.tp) { closePosition(i, pos.tp, 'tp'); continue; }
       if (curPrice <= pos.sl) { closePosition(i, pos.sl, 'sl'); continue; }
@@ -4096,7 +4125,8 @@ async function processSimCoin(sym) {
 function scheduleNext() {
   if (!simRunning) return;
   const coinCount = (simState.config.watchlist || []).length || 1;
-  const delay = Math.max(10000, coinCount * 3000);
+  const cycles = Math.ceil(coinCount / SIM_BATCH_SIZE);
+  const delay = Math.max(10000, Math.min(30000, cycles * 5000));
   simTimer = setTimeout(runSimCycle, delay);
 }
 
@@ -4142,9 +4172,10 @@ function getSimSignal(data, klines) {
   };
 }
 
-function fillSimWatchlist() {
-  const top10 = (allTopSymbols || []).slice(0, 10).map(s => s.symbol ? s.symbol.replace('USDT', '') : s.replace('USDT', '')).join(',');
-  document.getElementById('simWatchlist').value = top10 || 'BTC,ETH,SOL,BNB,XRP,DOGE,ADA,AVAX,DOT,LINK';
+async function fillSimWatchlistN(n) {
+  await loadTopSymbolsForDropdown();
+  const list = (allTopSymbols || []).slice(0, n).map(s => (s.symbol || s).replace('USDT', ''));
+  document.getElementById('simWatchlist').value = list.join(',');
 }
 
 function renderSimLogPanel() {
@@ -4170,34 +4201,112 @@ function renderSimLogPanel() {
 function renderSimEquityPanel() {
   const el = document.getElementById('simEquityPanel');
   const hist = simState.equityHistory;
-  if (hist.length < 2) {
-    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px;">数据不足，运行交易后可查看收益曲线</div>';
+  const trades = simState.closedTrades;
+
+  if (trades.length === 0 && hist.length < 2) {
+    el.innerHTML = '<div style="padding:20px;text-align:center;color:var(--text2);font-size:12px;">数据不足，运行交易后可查看收益曲线和统计</div>';
     return;
   }
 
-  const closedPnl = simState.closedTrades.reduce((s, t) => s + t.pnl, 0);
-  const maxEq = Math.max(...hist.map(h => h.equity));
-  const minEq = Math.min(...hist.map(h => h.equity));
-  const drawdown = ((maxEq - minEq) / maxEq * 100).toFixed(2);
+  const closedPnl = trades.reduce((s, t) => s + t.pnl, 0);
+  const maxEq = hist.length > 0 ? Math.max(...hist.map(h => h.equity)) : simState.initialBalance;
+  const minEq = hist.length > 0 ? Math.min(...hist.map(h => h.equity)) : simState.initialBalance;
+  const drawdown = maxEq > 0 ? ((maxEq - minEq) / maxEq * 100).toFixed(2) : '0.00';
+
+  // Per-coin stats
+  const coinStats = {};
+  trades.forEach(t => {
+    const sym = t.symbol || 'UNKNOWN';
+    if (!coinStats[sym]) coinStats[sym] = { total: 0, wins: 0, pnl: 0, longs: 0, longWins: 0, shorts: 0, shortWins: 0, maxProfit: 0, maxLoss: 0, pnls: [] };
+    const s = coinStats[sym];
+    s.total++;
+    s.pnl += t.pnl;
+    s.pnls.push(t.pnl);
+    if (t.pnl > 0) s.wins++;
+    if (t.pnl > s.maxProfit) s.maxProfit = t.pnl;
+    if (t.pnl < s.maxLoss) s.maxLoss = t.pnl;
+    if (t.direction === 'long') { s.longs++; if (t.pnl > 0) s.longWins++; }
+    else { s.shorts++; if (t.pnl > 0) s.shortWins++; }
+  });
+
+  // Direction summary
+  const longTrades = trades.filter(t => t.direction === 'long');
+  const shortTrades = trades.filter(t => t.direction === 'short');
+  const longPnl = longTrades.reduce((s, t) => s + t.pnl, 0);
+  const shortPnl = shortTrades.reduce((s, t) => s + t.pnl, 0);
+  const longWinRate = longTrades.length > 0 ? (longTrades.filter(t => t.pnl > 0).length / longTrades.length * 100).toFixed(1) : '--';
+  const shortWinRate = shortTrades.length > 0 ? (shortTrades.filter(t => t.pnl > 0).length / shortTrades.length * 100).toFixed(1) : '--';
+
+  // Reason summary
+  const reasonStats = {};
+  trades.forEach(t => {
+    const r = t.reason || 'unknown';
+    if (!reasonStats[r]) reasonStats[r] = { count: 0, pnl: 0 };
+    reasonStats[r].count++;
+    reasonStats[r].pnl += t.pnl;
+  });
+
+  const coinStatsHTML = Object.entries(coinStats)
+    .sort((a, b) => b[1].pnl - a[1].pnl)
+    .map(([sym, s]) => {
+      const wr = s.total > 0 ? (s.wins / s.total * 100).toFixed(1) : '0';
+      const avg = s.total > 0 ? (s.pnl / s.total).toFixed(2) : '0';
+      const pnlColor = s.pnl >= 0 ? 'var(--green)' : 'var(--red)';
+      return `<tr>
+        <td><b>${sym.replace('USDT','')}</b></td>
+        <td>${s.total}</td>
+        <td>${wr}%</td>
+        <td style="color:${pnlColor};">${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)}</td>
+        <td>$${avg}</td>
+        <td class="up">+$${s.maxProfit.toFixed(2)}</td>
+        <td class="down">$${s.maxLoss.toFixed(2)}</td>
+        <td>${s.longs}/${s.shorts}</td>
+      </tr>`;
+    }).join('');
 
   el.innerHTML = `
-    <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;">
-      <span>已实现盈亏: <b style="color:${closedPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${closedPnl >= 0 ? '+' : ''}$${closedPnl.toFixed(2)}</b></span>
+    <div style="display:flex;gap:16px;margin-bottom:8px;font-size:12px;flex-wrap:wrap;">
+      <span>已实现: <b style="color:${closedPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${closedPnl >= 0 ? '+' : ''}$${closedPnl.toFixed(2)}</b></span>
       <span>最大回撤: <b style="color:var(--red);">${drawdown}%</b></span>
-      <span>数据点: <b>${hist.length}</b></span>
+      <span>做多: <b style="color:${longPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${longPnl >= 0 ? '+' : ''}$${longPnl.toFixed(2)}</b> (${longWinRate}%)</span>
+      <span>做空: <b style="color:${shortPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${shortPnl >= 0 ? '+' : ''}$${shortPnl.toFixed(2)}</b> (${shortWinRate}%)</span>
     </div>
-    <canvas class="sim-equity-canvas" id="simEquityCanvas"></canvas>
-    ${simState.closedTrades.length > 0 ? `
-    <div style="margin-top:12px;font-size:12px;color:var(--text2);">最近交易 (${simState.closedTrades.length}笔)</div>
+
+    ${hist.length >= 2 ? '<canvas class="sim-equity-canvas" id="simEquityCanvas"></canvas>' : ''}
+
+    ${Object.keys(coinStats).length > 0 ? `
+    <div style="margin-top:14px;font-size:12px;color:var(--text2);font-weight:600;">各币种统计</div>
+    <div style="max-height:220px;overflow-y:auto;margin-top:6px;">
+      <table style="font-size:11px;">
+        <tr><th>币种</th><th>笔数</th><th>胜率</th><th>总盈亏</th><th>均笔</th><th>最大盈</th><th>最大亏</th><th>多/空</th></tr>
+        ${coinStatsHTML}
+      </table>
+    </div>` : ''}
+
+    ${Object.keys(reasonStats).length > 0 ? `
+    <div style="margin-top:14px;display:flex;gap:16px;font-size:12px;">
+      <span style="color:var(--text2);font-weight:600;">平仓原因分布:</span>
+      ${Object.entries(reasonStats).map(([r, s]) => {
+        const label = { tp: '止盈', sl: '止损', manual: '手动', signal: '反向' }[r] || r;
+        const c = r === 'tp' ? 'var(--green)' : r === 'sl' ? 'var(--red)' : 'var(--text2)';
+        return `<span><b style="color:${c};">${label}</b> ${s.count}笔 (${s.pnl >= 0 ? '+' : ''}$${s.pnl.toFixed(2)})</span>`;
+      }).join('')}
+    </div>` : ''}
+
+    <canvas class="sim-equity-canvas" id="simPnlDistCanvas" style="height:120px !important;margin-top:12px;"></canvas>
+
+    ${trades.length > 0 ? `
+    <div style="margin-top:12px;font-size:12px;color:var(--text2);">最近交易 (${trades.length}笔)</div>
     <div style="max-height:200px;overflow-y:auto;margin-top:6px;">
       <table style="font-size:11px;">
-        <tr><th>时间</th><th>方向</th><th>开仓价</th><th>平仓价</th><th>盈亏</th><th>原因</th></tr>
-        ${simState.closedTrades.slice().reverse().slice(0, 50).map(t => {
+        <tr><th>时间</th><th>币种</th><th>方向</th><th>开仓价</th><th>平仓价</th><th>盈亏</th><th>原因</th></tr>
+        ${trades.slice().reverse().slice(0, 50).map(t => {
           const dec = t.entryPrice < 1 ? 6 : 2;
           const pnlColor = t.pnl >= 0 ? 'var(--green)' : 'var(--red)';
           const timeStr = new Date(t.exitTime).toLocaleString('zh-CN', { month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit' });
           return `<tr>
             <td>${timeStr}</td>
+            <td><b>${(t.symbol || '').replace('USDT','')}</b></td>
             <td class="${t.direction === 'long' ? 'up' : 'down'}">${t.direction === 'long' ? '多' : '空'}</td>
             <td>$${t.entryPrice.toFixed(dec)}</td>
             <td>$${t.exitPrice.toFixed(dec)}</td>
@@ -4209,7 +4318,10 @@ function renderSimEquityPanel() {
     </div>` : ''}
   `;
 
-  requestAnimationFrame(() => drawSimEquityCurve());
+  requestAnimationFrame(() => {
+    drawSimEquityCurve();
+    drawPnlDistribution();
+  });
 }
 
 function drawSimEquityCurve() {
@@ -4279,6 +4391,83 @@ function drawSimEquityCurve() {
   ctx.beginPath(); ctx.arc(lastX, lastY, 4, 0, Math.PI * 2); ctx.fill();
   ctx.font = '10px sans-serif'; ctx.textAlign = 'left';
   ctx.fillText('$' + lastV.toFixed(0), lastX + 6, lastY + 3);
+}
+
+function drawPnlDistribution() {
+  const canvas = document.getElementById('simPnlDistCanvas');
+  if (!canvas) return;
+  const trades = simState.closedTrades;
+  if (trades.length < 3) return;
+
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+  const W = rect.width, H = rect.height;
+  const pad = { top: 16, right: 12, bottom: 20, left: 45 };
+  const cw = W - pad.left - pad.right, ch = H - pad.top - pad.bottom;
+
+  ctx.clearRect(0, 0, W, H);
+
+  const pnls = trades.map(t => t.pnl);
+  const minP = Math.min(...pnls);
+  const maxP = Math.max(...pnls);
+  const range = maxP - minP || 1;
+  const binCount = Math.min(20, Math.max(5, Math.ceil(trades.length / 3)));
+  const binSize = range / binCount;
+
+  const bins = Array(binCount).fill(0);
+  pnls.forEach(p => {
+    let idx = Math.floor((p - minP) / binSize);
+    if (idx >= binCount) idx = binCount - 1;
+    bins[idx]++;
+  });
+
+  const maxBin = Math.max(...bins);
+  const barW = cw / binCount - 2;
+
+  ctx.font = '10px sans-serif';
+  ctx.textAlign = 'left';
+  ctx.fillStyle = '#8b949e';
+  ctx.fillText('盈亏分布', pad.left, pad.top - 4);
+
+  // Grid
+  ctx.strokeStyle = '#21262d'; ctx.lineWidth = 0.5;
+  for (let i = 0; i <= 3; i++) {
+    const y = pad.top + (ch / 3) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(W - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#8b949e'; ctx.textAlign = 'right'; ctx.font = '9px sans-serif';
+    ctx.fillText(Math.round(maxBin * (1 - i / 3)), pad.left - 4, y + 3);
+  }
+
+  // Zero line
+  const zeroX = pad.left + ((0 - minP) / range) * cw;
+  if (zeroX > pad.left && zeroX < W - pad.right) {
+    ctx.strokeStyle = '#f0883e'; ctx.lineWidth = 1; ctx.setLineDash([3, 3]);
+    ctx.beginPath(); ctx.moveTo(zeroX, pad.top); ctx.lineTo(zeroX, pad.top + ch); ctx.stroke();
+    ctx.setLineDash([]);
+  }
+
+  // Bars
+  bins.forEach((count, i) => {
+    if (count === 0) return;
+    const x = pad.left + (cw / binCount) * i + 1;
+    const h = (count / maxBin) * ch;
+    const binMid = minP + binSize * (i + 0.5);
+    ctx.fillStyle = binMid >= 0 ? 'rgba(63,185,80,0.6)' : 'rgba(248,81,73,0.6)';
+    ctx.fillRect(x, pad.top + ch - h, barW, h);
+  });
+
+  // X axis labels
+  ctx.fillStyle = '#8b949e'; ctx.font = '9px sans-serif'; ctx.textAlign = 'center';
+  const labelStep = Math.max(1, Math.floor(binCount / 5));
+  for (let i = 0; i <= binCount; i += labelStep) {
+    const val = minP + binSize * i;
+    const x = pad.left + (cw / binCount) * i;
+    ctx.fillText((val >= 0 ? '+' : '') + val.toFixed(0), x, H - 4);
+  }
 }
 
 // ===== End 模拟自动交易 =====
