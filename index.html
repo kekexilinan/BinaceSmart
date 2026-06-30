@@ -3749,11 +3749,13 @@ function renderSimDashPanel() {
   const winRate = simState.totalTrades > 0 ? (simState.wins / simState.totalTrades * 100).toFixed(1) : '--';
   const unrealizedPnl = calcUnrealizedPnl();
 
+  const regimeInfo = getRegimeDisplay();
   el.innerHTML = `
     <div class="sim-status-bar">
       <span class="sim-running-badge ${simRunning ? 'active' : 'stopped'}">
         <span class="dot"></span> ${simRunning ? '运行中' : '已停止'}
       </span>
+      <span class="sim-stat">${regimeInfo}</span>
       <span class="sim-stat">余额 <span class="val">$${simState.balance.toFixed(2)}</span></span>
       <span class="sim-stat">收益 <span class="val" style="color:${pnl >= 0 ? 'var(--green)' : 'var(--red)'};">${pnl >= 0 ? '+' : ''}${pnl.toFixed(2)} (${pnlPct.toFixed(2)}%)</span></span>
       <span class="sim-stat">浮盈 <span class="val" style="color:${unrealizedPnl >= 0 ? 'var(--green)' : 'var(--red)'};">${unrealizedPnl >= 0 ? '+' : ''}${unrealizedPnl.toFixed(2)}</span></span>
@@ -4130,6 +4132,66 @@ function scheduleNext() {
   simTimer = setTimeout(runSimCycle, delay);
 }
 
+function getRegimeDisplay() {
+  if (!lastKlines || lastKlines.length < 30) return '<span class="val" style="color:var(--text2);">---</span>';
+  const closes = lastKlines.map(k => k.close);
+  const regime = detectMarketRegime(closes, lastKlines);
+  if (regime.regime === 'trending') {
+    const dir = regime.direction > 0 ? '↑多' : '↓空';
+    const color = regime.direction > 0 ? 'var(--green)' : 'var(--red)';
+    return `<span class="val" style="color:${color};">趋势${dir}</span>`;
+  }
+  return '<span class="val" style="color:var(--yellow);">震荡</span>';
+}
+
+function detectMarketRegime(closes, klines) {
+  if (closes.length < 30) return { regime: 'unknown', direction: 0, strength: 0 };
+
+  const n = closes.length;
+  const ma20 = closes.slice(n - 20).reduce((a, b) => a + b, 0) / 20;
+  const ma60 = n >= 60 ? closes.slice(n - 60).reduce((a, b) => a + b, 0) / 60 : ma20;
+
+  // ADX approximation: average true range direction
+  const highs = klines.map(k => k.high);
+  const lows = klines.map(k => k.low);
+  let plusDM = 0, minusDM = 0, tr = 0;
+  for (let j = Math.max(1, n - 14); j < n; j++) {
+    const hDiff = highs[j] - highs[j - 1];
+    const lDiff = lows[j - 1] - lows[j];
+    plusDM += (hDiff > lDiff && hDiff > 0) ? hDiff : 0;
+    minusDM += (lDiff > hDiff && lDiff > 0) ? lDiff : 0;
+    tr += Math.max(highs[j] - lows[j], Math.abs(highs[j] - closes[j - 1]), Math.abs(lows[j] - closes[j - 1]));
+  }
+  const diPlus = tr > 0 ? plusDM / tr : 0;
+  const diMinus = tr > 0 ? minusDM / tr : 0;
+  const dx = (diPlus + diMinus) > 0 ? Math.abs(diPlus - diMinus) / (diPlus + diMinus) : 0;
+
+  // Price vs MA spread
+  const maSpread = Math.abs(closes[n - 1] - ma20) / ma20;
+
+  // Consecutive direction
+  let consec = 0;
+  for (let j = n - 1; j >= Math.max(0, n - 10); j--) {
+    if (closes[j] > closes[Math.max(0, j - 1)]) consec++;
+    else consec--;
+  }
+
+  // Regime detection
+  const isTrending = dx > 0.2 || maSpread > 0.03 || Math.abs(consec) >= 6;
+  const direction = closes[n - 1] > ma20 ? 1 : -1;
+  const strength = dx + maSpread + Math.abs(consec) / 10;
+
+  // MA alignment strength
+  const maAligned = (closes[n - 1] > ma20 && ma20 > ma60) ? 1 : (closes[n - 1] < ma20 && ma20 < ma60) ? -1 : 0;
+
+  return {
+    regime: isTrending ? 'trending' : 'ranging',
+    direction: maAligned || direction,
+    strength: Math.min(1, strength),
+    dx, maSpread, consec,
+  };
+}
+
 function getSimSignal(data, klines) {
   if (!klines || klines.length < 30) return { long: 0, short: 0 };
 
@@ -4142,7 +4204,26 @@ function getSimSignal(data, klines) {
   const macd = { dif: macdArr.map(m => m.dif), dea: macdArr.map(m => m.dea), histogram: macdArr.map(m => m.macd) };
 
   const baseScore = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+  const regime = detectMarketRegime(closes, klines);
 
+  let longScore = baseScore.long;
+  let shortScore = baseScore.short;
+
+  // Adaptive weighting based on market regime
+  if (regime.regime === 'trending') {
+    if (regime.direction > 0) {
+      // Uptrend: boost long signals, suppress short (counter-trend) signals
+      longScore = Math.round(longScore * 1.5);
+      shortScore = Math.round(shortScore * 0.4);
+    } else {
+      // Downtrend: boost short signals, suppress long
+      shortScore = Math.round(shortScore * 1.5);
+      longScore = Math.round(longScore * 0.4);
+    }
+  }
+  // In ranging regime, keep signals as-is (mean reversion works well)
+
+  // Smart money boost
   let longBoost = 0, shortBoost = 0;
   if (data.topPositions && data.topPositions.length >= 3) {
     const posArr = data.topPositions;
@@ -4166,9 +4247,17 @@ function getSimSignal(data, klines) {
     if (fr > 0.001) shortBoost += 1;
   }
 
+  // In trending mode, smart money signals aligned with trend get extra boost
+  if (regime.regime === 'trending') {
+    if (regime.direction > 0) longBoost += 1;
+    else shortBoost += 1;
+  }
+
   return {
-    long: baseScore.long + longBoost,
-    short: baseScore.short + shortBoost,
+    long: longScore + longBoost,
+    short: shortScore + shortBoost,
+    regime: regime.regime,
+    direction: regime.direction,
   };
 }
 
