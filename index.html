@@ -181,6 +181,28 @@
   .signal-item { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 14px; }
   .signal-icon { font-size: 16px; width: 20px; text-align: center; }
 
+  .entry-rec {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px; display: none;
+  }
+  .entry-rec.show { display: block; }
+  .entry-rec h3 { font-size: 15px; margin-bottom: 12px; color: var(--yellow); }
+  .entry-rec-grid {
+    display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px;
+    margin-bottom: 12px;
+  }
+  .entry-rec-card {
+    background: var(--bg); border: 1px solid var(--border); border-radius: 8px;
+    padding: 10px 12px; text-align: center;
+  }
+  .entry-rec-card .label { font-size: 11px; color: var(--text2); margin-bottom: 4px; }
+  .entry-rec-card .value { font-size: 16px; font-weight: 600; }
+  .entry-rec-card .value.buy { color: var(--green); }
+  .entry-rec-card .value.stop { color: var(--red); }
+  .entry-rec-card .value.target { color: var(--blue); }
+  .entry-rec-reasons { font-size: 12px; color: var(--text2); line-height: 1.6; }
+  .entry-rec-reasons li { margin-bottom: 2px; }
+
   .kline-section {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; margin-bottom: 20px;
@@ -340,6 +362,7 @@
 <div class="signal-detail-card" id="signalDetailCard"></div>
 <div class="overview" id="overview"></div>
 <div class="signals" id="signals"></div>
+<div class="entry-rec" id="entryRec"></div>
 
 <div class="kline-section">
   <div class="kline-header">
@@ -1152,9 +1175,219 @@ async function fetchAndDrawKlines() {
       drawRSIChart(document.getElementById('c-rsi'), rsiLines, klines, currentTF);
       setupOverlay();
     });
+    renderEntryRecommendation(klines, rsiLines[0].data);
   } catch (e) {
     console.error('Kline fetch error:', e);
   }
+}
+
+function renderEntryRecommendation(klines, rsi6) {
+  const el = document.getElementById('entryRec');
+  if (!klines || klines.length < 30) { el.classList.remove('show'); return; }
+
+  const closes = klines.map(k => k.close);
+  const lows = klines.map(k => k.low);
+  const highs = klines.map(k => k.high);
+  const cur = closes[closes.length - 1];
+
+  const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const ma60 = closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : ma20;
+
+  // Support: recent N-bar lows
+  const recentLows = lows.slice(-30);
+  const support = Math.min(...recentLows.slice(-20));
+  const support2 = recentLows.sort((a, b) => a - b)[Math.floor(recentLows.length * 0.1)];
+
+  // Resistance: recent highs
+  const recentHighs = highs.slice(-30);
+  const resistance = Math.max(...recentHighs.slice(-10));
+
+  // RSI
+  const latestRSI = rsi6[rsi6.length - 1] || 50;
+
+  // MACD
+  const macd = calcMACD(closes);
+  const lastMACD = macd[macd.length - 1] || {};
+  const prevMACD = macd[macd.length - 2] || {};
+  const macdCrossing = lastMACD.dif > lastMACD.dea && prevMACD.dif <= prevMACD.dea;
+  const macdConverging = lastMACD.dif < lastMACD.dea && (lastMACD.dif - lastMACD.dea) > (prevMACD.dif - prevMACD.dea);
+
+  // Entry calculation
+  let entryPrice, stopLoss, targetPrice;
+  let reasons = [];
+  let signal = 'neutral';
+
+  // Priority 1: Near MA20 support
+  const distToMA20 = (cur - ma20) / ma20;
+  if (distToMA20 > -0.03 && distToMA20 < 0.02) {
+    entryPrice = ma20;
+    reasons.push('价格接近 MA20 支撑位');
+  }
+
+  // Priority 2: Near recent support
+  const distToSupport = (cur - support) / support;
+  if (distToSupport < 0.05) {
+    entryPrice = entryPrice ? Math.max(entryPrice, support) : support;
+    reasons.push(`接近近期支撑 $${support.toFixed(4)}`);
+  }
+
+  // Priority 3: RSI signals
+  if (latestRSI < 35) {
+    reasons.push(`RSI(6)=${latestRSI.toFixed(1)} 超卖区`);
+    signal = 'buy';
+  } else if (latestRSI < 50) {
+    reasons.push(`RSI(6)=${latestRSI.toFixed(1)} 偏低`);
+  }
+
+  // Priority 4: MACD
+  if (macdCrossing) {
+    reasons.push('MACD 刚金叉');
+    signal = 'buy';
+  } else if (macdConverging) {
+    reasons.push('MACD 即将金叉（DIF向DEA收敛）');
+  }
+
+  // Priority 5: MA alignment
+  if (cur > ma20 && ma20 > ma60) {
+    reasons.push('均线多头排列 (价格>MA20>MA60)');
+    if (signal !== 'buy') signal = 'hold';
+  }
+
+  // Priority 6: Smart money (from fetchData)
+  const sd = window._lastSmartData;
+  if (sd && sd.topPositions && sd.topPositions.length >= 3) {
+    const posArr = sd.topPositions;
+    const latR = parseFloat(posArr[posArr.length - 1].longShortRatio);
+    const prev3 = posArr.slice(-3).map(d => parseFloat(d.longShortRatio));
+    const posTrend = prev3[2] - prev3[0];
+    if (latR > 1.1 && posTrend > 0.05) { reasons.push(`大户持续加多 (${latR.toFixed(2)}↑)`); signal = signal === 'wait' ? 'hold' : signal; }
+    else if (latR < 0.9 && posTrend < -0.05) { reasons.push(`大户持续减多 (${latR.toFixed(2)}↓)`); }
+  }
+  if (sd && sd.takerVol && sd.takerVol.length >= 3) {
+    const tvArr = sd.takerVol;
+    const latBS = parseFloat(tvArr[tvArr.length - 1].buySellRatio);
+    const prev3 = tvArr.slice(-3).map(d => parseFloat(d.buySellRatio));
+    const bsTrend = prev3[2] - prev3[0];
+    if (latBS > 1.15 && bsTrend > 0) { reasons.push(`主动买入增强 (${latBS.toFixed(2)}↑)`); }
+    else if (latBS < 0.85 && bsTrend < 0) { reasons.push(`主动卖出增强 (${latBS.toFixed(2)}↓)`); }
+  }
+
+  if (!entryPrice) entryPrice = Math.min(ma20, support * 1.01);
+  if (entryPrice > cur) entryPrice = cur * 0.995;
+  stopLoss = Math.min(support * 0.97, entryPrice * 0.95);
+  targetPrice = Math.max(resistance, entryPrice * 1.1);
+
+  if (reasons.length === 0) {
+    reasons.push('暂无明确入场信号，建议观望');
+    signal = 'wait';
+  }
+
+  const signalText = signal === 'buy' ? '🟢 建议买入' : signal === 'hold' ? '🟡 持有/加仓' : '⚪ 观望等待';
+  const riskReward = (entryPrice - stopLoss) > 0 ? ((targetPrice - entryPrice) / (entryPrice - stopLoss)).toFixed(1) : '--';
+
+  // --- Sell recommendation ---
+  let sellPrice, sellStop, sellTarget;
+  let sellReasons = [];
+  let sellSignal = 'neutral';
+
+  const macdDeathCross = lastMACD.dif < lastMACD.dea && prevMACD.dif >= prevMACD.dea;
+  const macdDiverging = lastMACD.dif > lastMACD.dea && (lastMACD.dif - lastMACD.dea) < (prevMACD.dif - prevMACD.dea);
+
+  if (distToMA20 > 0.05) {
+    sellReasons.push(`价格远高于 MA20 ${(distToMA20 * 100).toFixed(1)}%`);
+  }
+  const distToResist = (resistance - cur) / cur;
+  if (distToResist < 0.02) {
+    sellReasons.push(`接近近期阻力 $${resistance.toFixed(4)}`);
+    sellSignal = 'sell';
+  }
+  if (latestRSI > 70) {
+    sellReasons.push(`RSI(6)=${latestRSI.toFixed(1)} 超买区`);
+    sellSignal = 'sell';
+  } else if (latestRSI > 60) {
+    sellReasons.push(`RSI(6)=${latestRSI.toFixed(1)} 偏高`);
+  }
+  if (macdDeathCross) {
+    sellReasons.push('MACD 刚死叉');
+    sellSignal = 'sell';
+  } else if (macdDiverging) {
+    sellReasons.push('MACD 动能衰减（柱体缩短）');
+  }
+  if (cur < ma20 && ma20 < ma60) {
+    sellReasons.push('均线空头排列 (价格<MA20<MA60)');
+    sellSignal = 'sell';
+  }
+
+  // Smart money sell signals
+  if (sd && sd.topPositions && sd.topPositions.length >= 3) {
+    const posArr = sd.topPositions;
+    const latR = parseFloat(posArr[posArr.length - 1].longShortRatio);
+    const prev3 = posArr.slice(-3).map(d => parseFloat(d.longShortRatio));
+    const posTrend = prev3[2] - prev3[0];
+    if (latR < 0.9 && posTrend < -0.05) { sellReasons.push(`大户持续减多 (${latR.toFixed(2)}↓)`); sellSignal = 'sell'; }
+    else if (latR > 1.1 && posTrend > 0.05) { /* long signal, skip sell */ }
+    else if (posTrend < -0.1) { sellReasons.push(`大户多空比快速下降`); }
+  }
+  if (sd && sd.takerVol && sd.takerVol.length >= 3) {
+    const tvArr = sd.takerVol;
+    const latBS = parseFloat(tvArr[tvArr.length - 1].buySellRatio);
+    const prev3 = tvArr.slice(-3).map(d => parseFloat(d.buySellRatio));
+    const bsTrend = prev3[2] - prev3[0];
+    if (latBS < 0.85 && bsTrend < 0) { sellReasons.push(`主动卖出增强 (${latBS.toFixed(2)}↓)`); sellSignal = 'sell'; }
+  }
+
+  sellPrice = Math.max(resistance * 0.99, cur * 1.005);
+  sellStop = resistance * 1.03;
+  sellTarget = Math.min(support, sellPrice * 0.9);
+
+  if (sellReasons.length === 0) {
+    sellReasons.push('暂无明确卖出信号');
+    sellSignal = 'wait';
+  }
+
+  const sellSignalText = sellSignal === 'sell' ? '🔴 建议卖出/减仓' : sellSignal === 'wait' ? '⚪ 暂无卖出信号' : '🟡 注意风险';
+  const sellRR = (sellStop - sellPrice) > 0 ? ((sellPrice - sellTarget) / (sellStop - sellPrice)).toFixed(1) : '--';
+
+  // Score comparison: determine dominant direction
+  const buyScore = (signal === 'buy' ? 3 : signal === 'hold' ? 1 : 0) + reasons.length;
+  const sellScore = (sellSignal === 'sell' ? 3 : 0) + sellReasons.length;
+  const dominant = buyScore > sellScore ? 'long' : sellScore > buyScore ? 'short' : 'neutral';
+
+  const dominantLabel = dominant === 'long' ? '📈 主导方向：<span style="color:var(--green);font-weight:700;">做多</span>'
+    : dominant === 'short' ? '📉 主导方向：<span style="color:var(--red);font-weight:700;">做空/卖出</span>'
+    : '⚖️ 方向：<span style="color:var(--yellow);font-weight:700;">多空博弈中</span>';
+
+  const longOpacity = dominant === 'short' ? 'opacity:0.5;' : '';
+  const shortOpacity = dominant === 'long' ? 'opacity:0.5;' : '';
+
+  el.innerHTML = `
+    <h3 style="color:var(--yellow);margin-bottom:4px;">📍 点位推荐 (${currentTF})</h3>
+    <div style="margin-bottom:14px;font-size:15px;">${dominantLabel} <span style="font-size:12px;color:var(--text2);margin-left:10px;">多方${buyScore}分 vs 空方${sellScore}分</span></div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+      <div style="${longOpacity}">
+        <div style="font-size:13px;font-weight:600;color:var(--green);margin-bottom:8px;">📈 做多 ${signalText}</div>
+        <div class="entry-rec-grid">
+          <div class="entry-rec-card"><div class="label">入场价</div><div class="value buy">$${entryPrice.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">止损</div><div class="value stop">$${stopLoss.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">目标</div><div class="value target">$${targetPrice.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">盈亏比</div><div class="value">${riskReward}:1</div></div>
+        </div>
+        <div class="entry-rec-reasons"><ul>${reasons.map(r => `<li>${r}</li>`).join('')}</ul></div>
+      </div>
+      <div style="${shortOpacity}">
+        <div style="font-size:13px;font-weight:600;color:var(--red);margin-bottom:8px;">📉 做空 ${sellSignalText}</div>
+        <div class="entry-rec-grid">
+          <div class="entry-rec-card"><div class="label">卖出价</div><div class="value stop">$${sellPrice.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">止损</div><div class="value buy">$${sellStop.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">目标</div><div class="value target">$${sellTarget.toFixed(4)}</div></div>
+          <div class="entry-rec-card"><div class="label">盈亏比</div><div class="value">${sellRR}:1</div></div>
+        </div>
+        <div class="entry-rec-reasons"><ul>${sellReasons.map(r => `<li>${r}</li>`).join('')}</ul></div>
+      </div>
+    </div>
+    <div style="margin-top:10px;font-size:11px;color:var(--text2);">* 仅供参考，不构成投资建议。当前价: $${cur.toFixed(4)} | MA20: $${ma20.toFixed(4)} | MA60: $${ma60.toFixed(4)} | 支撑: $${support.toFixed(4)} | 阻力: $${resistance.toFixed(4)}</div>
+  `;
+  el.classList.add('show');
 }
 
 function renderTFTabs() {
@@ -1259,6 +1492,7 @@ async function fetchData() {
     const res = await fetch(`/api/data?symbol=${symbol}&ratioLimit=${rangeOpt.limits.ratio}&oiLimit=${rangeOpt.limits.oi}&takerLimit=${rangeOpt.limits.taker}`);
     const data = await res.json();
     if (data.error) throw new Error(data.error);
+    window._lastSmartData = data;
     document.getElementById('title').textContent = `${symbol} 聪明钱监控面板`;
     renderOverview(data);
     renderSignals(data);
@@ -1330,6 +1564,8 @@ function changeSymbol(newSymbol) {
   url.searchParams.set('symbol', symbol);
   url.searchParams.set('interval', interval);
   history.replaceState(null, '', url);
+  document.getElementById('signalDetailCard').innerHTML = '';
+  document.getElementById('signalDetailCard').classList.remove('show');
   renderCoinTabs();
   fetchData();
   startCountdown();
@@ -1414,6 +1650,36 @@ function renderCoinTabs() {
     return;
   }
 
+  if (activeFilter === 'rec_long' || activeFilter === 'rec_short') {
+    const isLong = activeFilter === 'rec_long';
+    const results = isLong ? recLongResults : recShortResults;
+    const loading = isLong ? recLongLoading : recShortLoading;
+    if (results.length === 0 && !loading) {
+      el.innerHTML = `<span style="font-size:12px;color:var(--text2);">暂无推荐币种（得分≥3）</span>`;
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none'; return;
+    }
+    if (results.length === 0 && loading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">扫描中...</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none'; return;
+    }
+    const maxS = isLong ? 8 : 8;
+    el.innerHTML = results.map(c => {
+      const color = c.score >= 6 ? (isLong ? 'var(--green)' : 'var(--red)') : c.score >= 4 ? 'var(--yellow)' : 'var(--text2)';
+      const scoreTag = `<span style="color:${color};margin-left:3px;font-size:9px;font-weight:700;">${c.score}分</span>`;
+      const chg = c.change;
+      const chgColor = chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const chgTag = chg !== undefined ? `<span style="color:${chgColor};margin-left:3px;font-size:9px;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>` : '';
+      return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="selectRightCoin('${c.symbol}')" title="${escAttr(c.detail)}">` +
+        `${c.label}${scoreTag}${chgTag}</span>`;
+    }).join('');
+    if (results.length > 20) {
+      wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+      btn.style.display = '';
+      btn.textContent = coinListExpanded ? '收起' : `展开全部 (${results.length})`;
+    } else { wrap.className = 'coin-list-wrap'; btn.style.display = 'none'; }
+    return;
+  }
+
   // "all" mode - show preset coins (always show all, no collapse needed)
   wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
   el.innerHTML = presetCoins.map(c => {
@@ -1430,8 +1696,12 @@ function renderCoinTabs() {
 }
 
 function selectRightCoin(sym) {
-  showSignalDetail(sym);
+  if ((activeFilter === 'rec_long' || activeFilter === 'rec_short' || activeFilter === 'right_side' || activeFilter === 'left_side') && filterTF !== currentTF) {
+    currentTF = filterTF;
+    renderTFTabs();
+  }
   changeSymbol(sym);
+  showSignalDetail(sym);
   setTimeout(() => {
     document.getElementById('signalDetailCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
   }, 100);
@@ -1567,6 +1837,8 @@ const FILTER_DEFS = [
   { id: 'all', label: '全部' },
   { id: 'right_side', label: '右侧交易' },
   { id: 'left_side', label: '左侧交易' },
+  { id: 'rec_long', label: '推荐做多' },
+  { id: 'rec_short', label: '推荐做空' },
 ];
 
 function renderChartRangeBar() {
@@ -1601,7 +1873,19 @@ function renderFilterTabs() {
         extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
       }
     }
-    const loading = f.id === 'right_side' && rightSideLoading ? ' loading' : '';
+    if (f.id === 'rec_long') {
+      if (recLongResults.length > 0) badge = `<span class="badge">${recLongResults.length}</span>`;
+      if (recLongLoading && activeFilter === 'rec_long' && scanProgress.total > 0) {
+        extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
+      }
+    }
+    if (f.id === 'rec_short') {
+      if (recShortResults.length > 0) badge = `<span class="badge">${recShortResults.length}</span>`;
+      if (recShortLoading && activeFilter === 'rec_short' && scanProgress.total > 0) {
+        extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
+      }
+    }
+    const loading = (f.id === 'right_side' && rightSideLoading) || (f.id === 'rec_long' && recLongLoading) || (f.id === 'rec_short' && recShortLoading) ? ' loading' : '';
     return `<span class="filter-tab${isActive ? ' active' : ''}${loading}" onclick="switchFilter('${f.id}')">${f.label}${extra}${badge}</span>`;
   }).join('');
 
@@ -1638,6 +1922,12 @@ function switchFilter(filterId) {
   if (filterId === 'left_side' && leftSideCoins.size === 0 && !rightSideLoading) {
     scanLeftSideCoins();
   }
+  if (filterId === 'rec_long' && recLongResults.length === 0 && !recLongLoading) {
+    scanRecCoins('long');
+  }
+  if (filterId === 'rec_short' && recShortResults.length === 0 && !recShortLoading) {
+    scanRecCoins('short');
+  }
   renderCoinTabs();
 }
 
@@ -1648,6 +1938,8 @@ function clearAllScanCache() {
   leftSideCache = {};
   leftSideCoins.clear();
   leftSideResults = [];
+  recLongResults = [];
+  recShortResults = [];
 }
 
 function switchFilterTF(tf) {
@@ -1659,6 +1951,8 @@ function switchFilterTF(tf) {
   renderCoinTabs();
   if (activeFilter === 'right_side') scanRightSideCoins();
   else if (activeFilter === 'left_side') scanLeftSideCoins();
+  else if (activeFilter === 'rec_long') scanRecCoins('long');
+  else if (activeFilter === 'rec_short') scanRecCoins('short');
 }
 
 function switchScanRange(n) {
@@ -1670,6 +1964,8 @@ function switchScanRange(n) {
   renderCoinTabs();
   if (activeFilter === 'right_side') scanRightSideCoins();
   else if (activeFilter === 'left_side') scanLeftSideCoins();
+  else if (activeFilter === 'rec_long') scanRecCoins('long');
+  else if (activeFilter === 'rec_short') scanRecCoins('short');
 }
 
 function switchSort(s) {
@@ -2001,6 +2297,131 @@ function sortLeftSideResults() {
   }
 }
 
+let recLongResults = [];
+let recShortResults = [];
+let recLongLoading = false;
+let recShortLoading = false;
+
+async function checkCoinDirection(sym) {
+  try {
+    const [klRes, posRes, takerRes] = await Promise.all([
+      fetch(`/api/klines?symbol=${sym}&interval=${filterTF}&limit=60`),
+      fetch(`/api/data?symbol=${sym}&ratioLimit=5&oiLimit=2&takerLimit=5`).catch(() => null),
+    ].concat([]));
+    const raw = await klRes.json();
+    if (raw.error || !Array.isArray(raw) || raw.length < 30) return { buyScore: 0, sellScore: 0, buyReasons: [], sellReasons: [] };
+
+    let smartData = null;
+    if (posRes && posRes.ok) {
+      try { smartData = await posRes.json(); } catch {}
+    }
+
+    const closes = raw.map(k => parseFloat(k[4]));
+    const lows = raw.map(k => parseFloat(k[3]));
+    const highs = raw.map(k => parseFloat(k[2]));
+    const cur = closes[closes.length - 1];
+    const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const ma60 = closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : ma20;
+    const rsi6 = calcRSI(closes, 6);
+    const latestRSI = rsi6[rsi6.length - 1] || 50;
+    const macd = calcMACD(closes);
+    const last = macd[macd.length - 1] || {};
+    const prev = macd[macd.length - 2] || {};
+    const support = Math.min(...lows.slice(-20));
+    const resistance = Math.max(...highs.slice(-10));
+    const distMA20 = (cur - ma20) / ma20;
+
+    let buyScore = 0, sellScore = 0;
+    let buyReasons = [], sellReasons = [];
+
+    // Technical indicators
+    if (distMA20 > -0.03 && distMA20 < 0.02) { buyScore += 1; buyReasons.push('近MA20支撑'); }
+    if ((cur - support) / support < 0.05) { buyScore += 1; buyReasons.push('近支撑位'); }
+    if (latestRSI < 35) { buyScore += 2; buyReasons.push('RSI超卖'); }
+    else if (latestRSI < 50) { buyScore += 1; buyReasons.push('RSI偏低'); }
+    if (last.dif > last.dea && prev.dif <= prev.dea) { buyScore += 2; buyReasons.push('MACD金叉'); }
+    else if (last.dif < last.dea && (last.dif - last.dea) > (prev.dif - prev.dea)) { buyScore += 1; buyReasons.push('MACD收敛'); }
+    if (cur > ma20 && ma20 > ma60) { buyScore += 1; buyReasons.push('多头排列'); }
+
+    if (distMA20 > 0.05) { sellScore += 1; sellReasons.push('远高于MA20'); }
+    if ((resistance - cur) / cur < 0.02) { sellScore += 2; sellReasons.push('近阻力位'); }
+    if (latestRSI > 70) { sellScore += 2; sellReasons.push('RSI超买'); }
+    else if (latestRSI > 60) { sellScore += 1; sellReasons.push('RSI偏高'); }
+    if (last.dif < last.dea && prev.dif >= prev.dea) { sellScore += 2; sellReasons.push('MACD死叉'); }
+    else if (last.dif > last.dea && (last.dif - last.dea) < (prev.dif - prev.dea)) { sellScore += 1; sellReasons.push('MACD衰减'); }
+    if (cur < ma20 && ma20 < ma60) { sellScore += 1; sellReasons.push('空头排列'); }
+
+    // Smart money indicators
+    if (smartData) {
+      const pos = smartData.topPositions;
+      if (pos && pos.length >= 2) {
+        const latestR = parseFloat(pos[pos.length - 1].longShortRatio);
+        const prevR = parseFloat(pos[pos.length - 2].longShortRatio);
+        if (latestR > 1.2) { buyScore += 2; buyReasons.push(`大户偏多(${latestR.toFixed(2)})`); }
+        else if (latestR > 1) { buyScore += 1; buyReasons.push(`大户偏多(${latestR.toFixed(2)})`); }
+        if (latestR < 0.8) { sellScore += 2; sellReasons.push(`大户偏空(${latestR.toFixed(2)})`); }
+        else if (latestR < 1) { sellScore += 1; sellReasons.push(`大户偏空(${latestR.toFixed(2)})`); }
+        if (latestR > prevR + 0.05) { buyScore += 1; buyReasons.push('大户比值↑'); }
+        if (latestR < prevR - 0.05) { sellScore += 1; sellReasons.push('大户比值↓'); }
+      }
+      const taker = smartData.takerVol;
+      if (taker && taker.length >= 2) {
+        const latestBS = parseFloat(taker[taker.length - 1].buySellRatio);
+        const prevBS = parseFloat(taker[taker.length - 2].buySellRatio);
+        if (latestBS > 1.2) { buyScore += 2; buyReasons.push(`主动买入强(${latestBS.toFixed(2)})`); }
+        else if (latestBS > 1.05) { buyScore += 1; buyReasons.push(`主动买入(${latestBS.toFixed(2)})`); }
+        if (latestBS < 0.8) { sellScore += 2; sellReasons.push(`主动卖出强(${latestBS.toFixed(2)})`); }
+        else if (latestBS < 0.95) { sellScore += 1; sellReasons.push(`主动卖出(${latestBS.toFixed(2)})`); }
+        if (latestBS > prevBS + 0.1) { buyScore += 1; buyReasons.push('买入放量'); }
+        if (latestBS < prevBS - 0.1) { sellScore += 1; sellReasons.push('卖出放量'); }
+      }
+    }
+
+    return { buyScore, sellScore, buyReasons, sellReasons, detail: buyReasons.join(',') + ' | ' + sellReasons.join(',') };
+  } catch { return { buyScore: 0, sellScore: 0, buyReasons: [], sellReasons: [] }; }
+}
+
+async function scanRecCoins(direction) {
+  const isLong = direction === 'long';
+  if (isLong) { recLongLoading = true; recLongResults = []; }
+  else { recShortLoading = true; recShortResults = []; }
+  scanProgress = { done: 0, total: 0 };
+  renderFilterTabs();
+  renderCoinTabs();
+
+  let symbols;
+  try {
+    const res = await fetch(`/api/top-symbols?limit=${scanTopLimit}`);
+    symbols = await res.json();
+    if (!Array.isArray(symbols)) throw new Error('bad');
+  } catch {
+    if (isLong) recLongLoading = false; else recShortLoading = false;
+    renderFilterTabs(); return;
+  }
+
+  scanProgress.total = symbols.length;
+  renderFilterTabs();
+
+  await pMap(symbols, async (item) => {
+    const r = await checkCoinDirection(item.symbol);
+    scanProgress.done++;
+    const score = isLong ? r.buyScore : r.sellScore;
+    if (score >= 3) {
+      const entry = { symbol: item.symbol, label: item.symbol.replace('USDT',''), score, detail: (isLong ? r.buyReasons : r.sellReasons).join(' / '), volume: item.volume, change: item.change };
+      if (isLong) recLongResults.push(entry);
+      else recShortResults.push(entry);
+      if (isLong) recLongResults.sort((a,b) => b.score - a.score);
+      else recShortResults.sort((a,b) => b.score - a.score);
+      renderCoinTabs();
+    }
+    if (scanProgress.done % 10 === 0) renderFilterTabs();
+  }, 5);
+
+  if (isLong) recLongLoading = false; else recShortLoading = false;
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
 function setupOverlay() {
   const hoverArea = document.getElementById('klineHoverArea');
   const overlay = document.getElementById('c-kline-overlay');
@@ -2127,7 +2548,12 @@ renderTFTabs();
 renderChartRangeBar();
 fetchData();
 startCountdown();
-setTimeout(scanRightSideCoins, 2000);
+setTimeout(() => {
+  if (activeFilter === 'right_side') scanRightSideCoins();
+  else if (activeFilter === 'left_side') scanLeftSideCoins();
+  else if (activeFilter === 'rec_long') scanRecCoins('long');
+  else if (activeFilter === 'rec_short') scanRecCoins('short');
+}, 2000);
 </script>
 </body>
 </html>
