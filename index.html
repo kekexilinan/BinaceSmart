@@ -13,8 +13,8 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { background: var(--bg); color: var(--text); font-family: -apple-system, 'Segoe UI', sans-serif; padding: 16px; }
 
-  .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 20px; }
-  .header h1 { font-size: 22px; font-weight: 600; }
+  .header { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  .header h1 { font-size: 20px; font-weight: 600; }
   .controls { display: flex; gap: 8px; align-items: center; }
   .controls input, .controls select {
     background: var(--card); border: 1px solid var(--border); color: var(--text);
@@ -25,7 +25,100 @@
     border-radius: 6px; cursor: pointer; font-size: 14px;
   }
   .controls button:hover { opacity: 0.85; }
-  .coin-tabs { display: flex; gap: 4px; }
+  .symbol-select-wrap { position: relative; }
+  .symbol-select-wrap input { width: 120px; }
+  .symbol-dropdown {
+    position: absolute; top: 100%; left: 0; z-index: 1000;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    max-height: 280px; overflow-y: auto; width: 220px; margin-top: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none;
+  }
+  .symbol-dropdown.show { display: block; }
+  .symbol-dropdown-item {
+    padding: 7px 12px; font-size: 12px; cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--text); transition: background 0.1s;
+  }
+  .symbol-dropdown-item:hover { background: rgba(88,166,255,0.12); }
+  .symbol-dropdown-item .sym-name { font-weight: 500; }
+  .symbol-dropdown-item .sym-vol { color: var(--text2); font-size: 10px; }
+  .symbol-dropdown-item .sym-chg { font-size: 10px; }
+  .symbol-dropdown-empty { padding: 12px; font-size: 12px; color: var(--text2); text-align: center; }
+  .filter-bar {
+    display: flex; align-items: center; gap: 8px; margin-bottom: 12px;
+    padding: 8px 12px; background: var(--card); border: 1px solid var(--border);
+    border-radius: 8px; flex-wrap: wrap;
+  }
+  .filter-tabs { display: flex; gap: 4px; }
+  .filter-tab {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text2);
+    padding: 5px 14px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
+    transition: all 0.15s; position: relative;
+  }
+  .filter-tab:hover { border-color: var(--blue); color: var(--text); }
+  .filter-tab.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .filter-tab .badge {
+    position: absolute; top: -5px; right: -5px; background: var(--green); color: #fff;
+    font-size: 9px; min-width: 14px; height: 14px; border-radius: 7px;
+    display: flex; align-items: center; justify-content: center; padding: 0 3px;
+  }
+  .filter-tab.loading::after {
+    content: ''; display: inline-block; width: 10px; height: 10px; margin-left: 4px;
+    border: 2px solid #fff3; border-top-color: #fff; border-radius: 50%;
+    animation: spin 0.6s linear infinite; vertical-align: middle;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  .filter-sep { width: 1px; height: 16px; background: var(--border); margin: 0 4px; }
+  .filter-group { display: flex; gap: 2px; align-items: center; }
+  .filter-group-label { font-size: 10px; color: var(--text2); margin-right: 3px; white-space: nowrap; }
+  .filter-pill {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text2);
+    padding: 2px 7px; border-radius: 4px; cursor: pointer; font-size: 10px;
+    transition: all 0.15s; white-space: nowrap;
+  }
+  .filter-pill:hover { border-color: var(--blue); color: var(--text); }
+  .filter-pill.active { background: var(--blue); color: #fff; border-color: var(--blue); }
+  .coin-tabs { display: flex; gap: 4px; flex-wrap: wrap; }
+  .coin-list-wrap {
+    margin-bottom: 16px; position: relative;
+  }
+  .coin-list-wrap.collapsed .coin-tabs { max-height: 72px; overflow: hidden; }
+  .coin-list-wrap .show-more-btn {
+    display: none; margin-top: 6px; background: none; border: 1px solid var(--border);
+    color: var(--text2); padding: 3px 12px; border-radius: 4px; cursor: pointer; font-size: 11px;
+  }
+  .coin-list-wrap .show-more-btn:hover { border-color: var(--blue); color: var(--text); }
+  .coin-list-wrap.collapsed .show-more-btn { display: inline-block; }
+  .coin-list-wrap.expanded .show-more-btn { display: inline-block; }
+
+  .coin-tab { transition: all 0.12s; }
+  .coin-tab:hover { border-color: var(--blue); color: var(--text); transform: translateY(-1px); }
+  .coin-tab.active { box-shadow: 0 2px 8px rgba(88, 166, 255, 0.2); }
+
+  @media (max-width: 768px) {
+    body { padding: 10px; }
+    .header { gap: 8px; margin-bottom: 8px; }
+    .header h1 { font-size: 16px; }
+    .filter-bar { padding: 6px 8px; gap: 6px; }
+    .filter-group-label { display: none; }
+    .filter-sep { height: 12px; }
+    .filter-pill { padding: 2px 5px; font-size: 9px; }
+    .filter-tab { padding: 4px 10px; font-size: 11px; }
+    .coin-tab { padding: 3px 8px; font-size: 11px; }
+    .coin-tabs { gap: 3px; }
+    .controls input { width: 80px !important; }
+    .overview { grid-template-columns: repeat(2, 1fr); gap: 8px; }
+    .charts-grid { grid-template-columns: 1fr; }
+    .kline-section { padding: 12px; }
+    .signal-detail-card { padding: 12px; }
+    .signal-detail-card .sd-signals { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 480px) {
+    .filter-bar { flex-direction: column; align-items: flex-start; }
+    .filter-sep { width: 100%; height: 1px; margin: 4px 0; }
+    .overview { grid-template-columns: repeat(2, 1fr); }
+    .controls { flex-wrap: wrap; }
+  }
   .coin-tab {
     background: var(--card); border: 1px solid var(--border); color: var(--text2);
     padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; font-weight: 500;
@@ -44,18 +137,28 @@
     padding: 3px 8px; border-radius: 4px; cursor: pointer; font-size: 11px;
   }
   .edit-toggle:hover { border-color: var(--blue); color: var(--text); }
-  .add-coin-input {
+  .add-coin-wrap { position: relative; display: none; }
+  .coin-tabs.editing ~ .add-coin-wrap { display: inline-flex; align-items: center; }
+  .coin-search-input {
     background: var(--card); border: 1px solid var(--border); color: var(--text);
-    padding: 4px 8px; border-radius: 6px; font-size: 12px; width: 80px;
-    display: none;
+    padding: 4px 8px; border-radius: 6px; font-size: 12px; width: 120px;
   }
-  .coin-tabs.editing + .add-coin-wrap .add-coin-input { display: inline-block; }
-  .add-coin-btn {
-    background: var(--green); color: #fff; border: none;
-    padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px;
-    display: none;
+  .coin-search-input:focus { border-color: var(--blue); outline: none; }
+  .coin-dropdown {
+    position: absolute; top: 100%; left: 0; z-index: 999;
+    background: var(--card); border: 1px solid var(--border); border-radius: 8px;
+    max-height: 240px; overflow-y: auto; width: 180px; margin-top: 4px;
+    box-shadow: 0 4px 16px rgba(0,0,0,0.4); display: none;
   }
-  .coin-tabs.editing + .add-coin-wrap .add-coin-btn { display: inline-block; }
+  .coin-dropdown.show { display: block; }
+  .coin-dropdown-item {
+    padding: 6px 10px; font-size: 12px; cursor: pointer;
+    display: flex; justify-content: space-between; align-items: center;
+    color: var(--text);
+  }
+  .coin-dropdown-item:hover { background: rgba(88,166,255,0.1); }
+  .coin-dropdown-item .vol { color: var(--text2); font-size: 10px; }
+  .coin-dropdown-empty { padding: 10px; font-size: 12px; color: var(--text2); text-align: center; }
   .status { font-size: 13px; color: var(--text2); }
   .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
   .status .live { background: var(--green); animation: pulse 2s infinite; }
@@ -114,6 +217,41 @@
   td { padding: 5px 8px; border-bottom: 1px solid var(--border); }
   .up { color: var(--green); } .down { color: var(--red); } .neutral { color: var(--yellow); }
 
+  .signal-detail-card {
+    background: var(--card); border: 1px solid var(--blue); border-radius: 10px;
+    padding: 16px; margin-bottom: 16px; display: none;
+    animation: fadeSlideDown 0.25s ease;
+  }
+  .signal-detail-card.show { display: block; }
+  @keyframes fadeSlideDown {
+    from { opacity: 0; transform: translateY(-8px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .signal-detail-card .sd-header {
+    display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px;
+  }
+  .signal-detail-card .sd-header h3 { font-size: 16px; color: var(--blue); }
+  .signal-detail-card .sd-close {
+    background: none; border: none; color: var(--text2); font-size: 18px; cursor: pointer;
+    padding: 2px 8px; border-radius: 4px;
+  }
+  .signal-detail-card .sd-close:hover { color: var(--text); background: var(--bg); }
+  .signal-detail-card .sd-score {
+    display: flex; align-items: center; gap: 6px; margin-bottom: 12px;
+  }
+  .signal-detail-card .sd-score-bar {
+    flex: 1; height: 8px; background: var(--bg); border-radius: 4px; overflow: hidden;
+  }
+  .signal-detail-card .sd-score-fill { height: 100%; border-radius: 4px; transition: width 0.3s; }
+  .signal-detail-card .sd-signals { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 16px; }
+  .signal-detail-card .sd-signal-item {
+    display: flex; align-items: center; gap: 6px; font-size: 13px; padding: 4px 0;
+  }
+  .signal-detail-card .sd-meta {
+    display: flex; gap: 16px; margin-top: 12px; padding-top: 10px;
+    border-top: 1px solid var(--border); font-size: 12px; color: var(--text2);
+  }
+
   .alert-section {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; margin-bottom: 20px;
@@ -159,28 +297,55 @@
 <div class="header">
   <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
     <h1 id="title">聪明钱监控面板</h1>
-    <div class="coin-tabs" id="coinTabs"></div>
-    <span class="add-coin-wrap">
-      <input class="add-coin-input" id="addCoinInput" placeholder="如 AVAX" onkeydown="if(event.key==='Enter')addCoin()">
-      <button class="add-coin-btn" onclick="addCoin()">+</button>
-    </span>
-    <button class="edit-toggle" id="editToggle" onclick="toggleEdit()">编辑</button>
   </div>
   <div class="controls">
-    <input id="symbolInput" value="SLXUSDT" placeholder="交易对" style="width:120px">
+    <div class="symbol-select-wrap" id="symbolSelectWrap">
+      <input id="symbolInput" value="SLXUSDT" placeholder="搜索币种..." autocomplete="off"
+        oninput="filterSymbolDropdown()" onfocus="openSymbolDropdown()" onblur="closeSymbolDropdown()" />
+      <div class="symbol-dropdown" id="symbolDropdown"></div>
+    </div>
     <select id="intervalSelect">
       <option value="30">30s</option>
       <option value="60" selected>60s</option>
       <option value="120">2min</option>
       <option value="300">5min</option>
     </select>
-    <button onclick="changeSymbol()">切换</button>
     <span class="status"><span class="dot live"></span><span id="countdown"></span></span>
   </div>
 </div>
 
+<div class="filter-bar" id="filterBar"></div>
+<div class="coin-list-wrap collapsed" id="coinListWrap">
+  <div class="coin-tabs" id="coinTabs"></div>
+  <button class="show-more-btn" id="showMoreBtn" onclick="toggleCoinListExpand()">展开全部</button>
+  <span class="add-coin-wrap" id="addCoinWrap" style="margin-left:8px;">
+    <input class="coin-search-input" id="coinSearchInput" placeholder="搜索添加币种..." autocomplete="off"
+      oninput="filterCoinDropdown()" onfocus="openCoinDropdown()" onblur="closeCoinDropdown()" />
+    <div class="coin-dropdown" id="coinDropdown"></div>
+  </span>
+  <button class="edit-toggle" id="editToggle" onclick="toggleEdit()" style="margin-left:4px;">编辑</button>
+</div>
+<div class="signal-detail-card" id="signalDetailCard"></div>
 <div class="overview" id="overview"></div>
 <div class="signals" id="signals"></div>
+
+<div class="kline-section">
+  <div class="kline-header">
+    <h3>价格走势 & RSI</h3>
+    <div class="tf-tabs" id="tfTabs"></div>
+  </div>
+  <div class="kline-canvas-wrap">
+    <div class="kline-ohlc" id="klineOHLC"></div>
+    <div class="kline-hover-area" id="klineHoverArea">
+      <canvas id="c-kline"></canvas>
+      <canvas id="c-kline-overlay"></canvas>
+    </div>
+    <div class="rsi-label">RSI(6, 12, 24)</div>
+    <canvas id="c-rsi"></canvas>
+  </div>
+</div>
+
+<div class="charts-grid" id="charts"></div>
 
 <div class="alert-section">
   <div class="alert-header">
@@ -216,24 +381,6 @@
   <div id="toastBody"></div>
 </div>
 
-<div class="kline-section">
-  <div class="kline-header">
-    <h3>价格走势 & RSI</h3>
-    <div class="tf-tabs" id="tfTabs"></div>
-  </div>
-  <div class="kline-canvas-wrap">
-    <div class="kline-ohlc" id="klineOHLC"></div>
-    <div class="kline-hover-area" id="klineHoverArea">
-      <canvas id="c-kline"></canvas>
-      <canvas id="c-kline-overlay"></canvas>
-    </div>
-    <div class="rsi-label">RSI(6, 12, 24)</div>
-    <canvas id="c-rsi"></canvas>
-  </div>
-</div>
-
-<div class="charts-grid" id="charts"></div>
-
 <script>
 const urlParams = new URLSearchParams(window.location.search);
 let symbol = urlParams.get('symbol')?.toUpperCase() || 'SLXUSDT';
@@ -242,14 +389,14 @@ let timer = null;
 let remaining = 0;
 
 const defaultCoins = [
+  { symbol: 'VELVETUSDT', label: 'VELVET' },
   { symbol: 'SLXUSDT', label: 'SLX' },
+  { symbol: 'SKYAIUSDT', label: 'SKYAI' },
+  { symbol: 'RAVEUSDT', label: 'RAVE' },
+  { symbol: 'ESPORTSUSDT', label: 'ESPORTS' },
+  { symbol: 'PLAYUSDT', label: 'PLAY' },
+  { symbol: 'BEATUSDT', label: 'BEAT' },
   { symbol: 'BTCUSDT', label: 'BTC' },
-  { symbol: 'ETHUSDT', label: 'ETH' },
-  { symbol: 'BNBUSDT', label: 'BNB' },
-  { symbol: 'SOLUSDT', label: 'SOL' },
-  { symbol: 'DOGEUSDT', label: 'DOGE' },
-  { symbol: 'XRPUSDT', label: 'XRP' },
-  { symbol: 'PEPEUSDT', label: 'PEPE' },
 ];
 
 function loadCoins() {
@@ -262,6 +409,42 @@ function loadCoins() {
 function saveCoins() { localStorage.setItem('smart-money-coins', JSON.stringify(presetCoins)); }
 let presetCoins = loadCoins();
 let editing = false;
+
+function escAttr(s) { return (s || '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;'); }
+
+// Right-side trading filter
+function loadFilterSettings() {
+  try {
+    const s = JSON.parse(localStorage.getItem('smart-money-filter-settings'));
+    return s || {};
+  } catch { return {}; }
+}
+function saveFilterSettings() {
+  localStorage.setItem('smart-money-filter-settings', JSON.stringify({ filterTF, scanTopLimit, activeFilter, sortBy }));
+}
+const savedFilterSettings = loadFilterSettings();
+let activeFilter = savedFilterSettings.activeFilter || 'all';
+let rightSideCoins = new Set();
+let rightSideLoading = false;
+let rightSideCache = {};
+let filterTF = savedFilterSettings.filterTF || '1h';
+const FILTER_TF_OPTIONS = [
+  { value: '1h', label: '1H' },
+  { value: '4h', label: '4H' },
+  { value: '1d', label: '1D' },
+];
+const SCAN_RANGE_OPTIONS = [
+  { value: 50, label: 'Top50' },
+  { value: 100, label: 'Top100' },
+  { value: 200, label: 'Top200' },
+  { value: 500, label: 'Top500' },
+];
+const SORT_OPTIONS = [
+  { value: 'score', label: '评分↓' },
+  { value: 'change', label: '涨幅↓' },
+  { value: 'volume', label: '成交量↓' },
+];
+let sortBy = savedFilterSettings.sortBy || 'score';
 
 const timeframes = [
   { value: '5m', label: '5分钟' },
@@ -407,13 +590,13 @@ function checkRSIAlerts(rsi6) {
 }
 
 function formatNum(n) {
-  if (n >= 1e6) return (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return (n / 1e3).toFixed(1) + 'K';
+  if (n >= 1e8) return (n / 1e8).toFixed(2) + '亿';
+  if (n >= 1e4) return (n / 1e4).toFixed(2) + '万';
   return n.toFixed(0);
 }
 function formatUSDT(n) {
-  if (n >= 1e6) return '$' + (n / 1e6).toFixed(2) + 'M';
-  if (n >= 1e3) return '$' + (n / 1e3).toFixed(1) + 'K';
+  if (n >= 1e8) return '$' + (n / 1e8).toFixed(2) + '亿';
+  if (n >= 1e4) return '$' + (n / 1e4).toFixed(2) + '万';
   return '$' + n.toFixed(2);
 }
 function ts2time(ts) {
@@ -433,10 +616,23 @@ function renderOverview(data) {
   const latestPos = data.topPositions[data.topPositions.length - 1];
   const posRatio = parseFloat(latestPos.longShortRatio);
 
+  const t24h = data.ticker24h || {};
+  const vol24h = parseFloat(t24h.quoteVolume || 0);
+  const change24h = parseFloat(t24h.priceChangePercent || 0);
+
   document.getElementById('overview').innerHTML = `
     <div class="stat-card">
       <div class="label">当前价格</div>
       <div class="value">$${price.toFixed(4)}</div>
+      <div class="sub ${change24h >= 0 ? 'up' : 'down'}">${change24h >= 0 ? '+' : ''}${change24h.toFixed(2)}% 24h</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">市值</div>
+      <div class="value" id="marketCapValue">--</div>
+    </div>
+    <div class="stat-card">
+      <div class="label">24h 成交额</div>
+      <div class="value">${formatUSDT(vol24h)}</div>
     </div>
     <div class="stat-card">
       <div class="label">大户持仓多空比</div>
@@ -453,6 +649,15 @@ function renderOverview(data) {
       <div class="sub">${formatUSDT(oiVal * price)}</div>
     </div>
   `;
+
+  fetch(`/api/marketcap?symbol=${symbol}`).then(r => r.json()).then(d => {
+    const el = document.getElementById('marketCapValue');
+    if (el && d.market_cap > 0) el.textContent = formatUSDT(d.market_cap);
+    else if (el) el.textContent = 'N/A';
+  }).catch(() => {
+    const el = document.getElementById('marketCapValue');
+    if (el) el.textContent = 'N/A';
+  });
 }
 
 function renderSignals(data) {
@@ -929,7 +1134,7 @@ function renderCharts(data) {
           <h4 style="font-size:13px;color:var(--text2);margin-bottom:6px;">大户持仓多空比 (1h)</h4>
           <table>
             <tr><th>时间</th><th>多头%</th><th>空头%</th><th>比值</th></tr>
-            ${data.topPositions.map(d => `<tr>
+            ${data.topPositions.slice().reverse().map(d => `<tr>
               <td>${ts2time(d.timestamp)}</td>
               <td>${(d.longAccount * 100).toFixed(1)}%</td>
               <td>${(d.shortAccount * 100).toFixed(1)}%</td>
@@ -941,7 +1146,7 @@ function renderCharts(data) {
           <h4 style="font-size:13px;color:var(--text2);margin-bottom:6px;">主动买卖量 (5min)</h4>
           <table>
             <tr><th>时间</th><th>买入</th><th>卖出</th><th>买卖比</th></tr>
-            ${data.takerVol.map(d => `<tr>
+            ${data.takerVol.slice().reverse().map(d => `<tr>
               <td>${ts2time(d.timestamp)}</td>
               <td class="up">${formatNum(parseFloat(d.buyVol))}</td>
               <td class="down">${formatNum(parseFloat(d.sellVol))}</td>
@@ -1017,6 +1222,41 @@ function startCountdown() {
   }, 1000);
 }
 
+function openSymbolDropdown() {
+  loadTopSymbolsForDropdown().then(() => filterSymbolDropdown());
+  document.getElementById('symbolDropdown').classList.add('show');
+}
+function closeSymbolDropdown() {
+  setTimeout(() => { document.getElementById('symbolDropdown').classList.remove('show'); }, 150);
+}
+function filterSymbolDropdown() {
+  const input = document.getElementById('symbolInput');
+  const dd = document.getElementById('symbolDropdown');
+  const q = input.value.toUpperCase().trim();
+  let filtered = allTopSymbols;
+  if (q) filtered = filtered.filter(s => s.symbol.includes(q) || s.symbol.replace('USDT','').includes(q));
+  filtered = filtered.slice(0, 40);
+  if (filtered.length === 0) {
+    dd.innerHTML = '<div class="symbol-dropdown-empty">无匹配结果</div>';
+  } else {
+    dd.innerHTML = filtered.map(s => {
+      const chg = s.change != null ? s.change : 0;
+      const cls = chg >= 0 ? 'up' : 'down';
+      return `<div class="symbol-dropdown-item" onmousedown="selectSymbolFromDropdown('${s.symbol}')">
+        <span class="sym-name">${s.symbol.replace('USDT','')}/USDT</span>
+        <span class="sym-chg ${cls}">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>
+        <span class="sym-vol">${formatUSDT(s.volume)}</span>
+      </div>`;
+    }).join('');
+  }
+  dd.classList.add('show');
+}
+function selectSymbolFromDropdown(sym) {
+  document.getElementById('symbolInput').value = sym;
+  document.getElementById('symbolDropdown').classList.remove('show');
+  changeSymbol(sym);
+}
+
 function changeSymbol(newSymbol) {
   if (newSymbol) {
     symbol = newSymbol;
@@ -1034,13 +1274,153 @@ function changeSymbol(newSymbol) {
   startCountdown();
 }
 
+let coinListExpanded = false;
+
+function toggleCoinListExpand() {
+  coinListExpanded = !coinListExpanded;
+  const wrap = document.getElementById('coinListWrap');
+  const btn = document.getElementById('showMoreBtn');
+  wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+  btn.textContent = coinListExpanded ? '收起' : '展开全部';
+}
+
 function renderCoinTabs() {
   const el = document.getElementById('coinTabs');
   el.className = 'coin-tabs' + (editing ? ' editing' : '');
-  el.innerHTML = presetCoins.map(c =>
-    `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="changeSymbol('${c.symbol}')">` +
-    `${c.label}<span class="remove-btn" onclick="event.stopPropagation();removeCoin('${c.symbol}')">✕</span></span>`
-  ).join('');
+  const wrap = document.getElementById('coinListWrap');
+  const btn = document.getElementById('showMoreBtn');
+
+  if (activeFilter === 'left_side') {
+    if (leftSideResults.length === 0 && !rightSideLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">暂无符合左侧交易条件的币种</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    if (leftSideResults.length === 0 && rightSideLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">扫描中...</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    el.innerHTML = leftSideResults.map(c => {
+      const s = c.score || 0;
+      const color = s >= 5 ? 'var(--red)' : s >= 4 ? '#f85149cc' : s >= 3 ? 'var(--yellow)' : 'var(--text2)';
+      const scoreTag = `<span style="color:${color};margin-left:3px;font-size:9px;font-weight:700;">${s}/6</span>`;
+      const chg = c.change;
+      const chgColor = chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const chgTag = chg !== undefined ? `<span style="color:${chgColor};margin-left:3px;font-size:9px;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>` : '';
+      return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="selectRightCoin('${c.symbol}')" title="${escAttr(c.detail)}">` +
+        `${c.label}${scoreTag}${chgTag}</span>`;
+    }).join('');
+    if (leftSideResults.length > 20) {
+      wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+      btn.style.display = '';
+      btn.textContent = coinListExpanded ? '收起' : `展开全部 (${leftSideResults.length})`;
+    } else {
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+    }
+    return;
+  }
+
+  if (activeFilter === 'right_side') {
+    if (rightSideResults.length === 0 && !rightSideLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">暂无符合右侧交易条件的币种</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    if (rightSideResults.length === 0 && rightSideLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">扫描中...</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    el.innerHTML = rightSideResults.map(c => {
+      const s = c.score || 0;
+      const color = s >= 5 ? 'var(--green)' : s >= 4 ? '#3fb950cc' : s >= 3 ? 'var(--yellow)' : 'var(--text2)';
+      const scoreTag = `<span style="color:${color};margin-left:3px;font-size:9px;font-weight:700;">${s}/5</span>`;
+      const chg = c.change;
+      const chgColor = chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const chgTag = chg !== undefined ? `<span style="color:${chgColor};margin-left:3px;font-size:9px;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>` : '';
+      return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="selectRightCoin('${c.symbol}')" title="${escAttr(c.detail)}">` +
+        `${c.label}${scoreTag}${chgTag}</span>`;
+    }).join('');
+    // Show collapse button if many results
+    if (rightSideResults.length > 20) {
+      wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+      btn.style.display = '';
+      btn.textContent = coinListExpanded ? '收起' : `展开全部 (${rightSideResults.length})`;
+    } else {
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+    }
+    return;
+  }
+
+  // "all" mode - show preset coins (always show all, no collapse needed)
+  wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+  el.innerHTML = presetCoins.map(c => {
+    const cache = rightSideCache[c.symbol];
+    let scoreTag = '';
+    if (cache && cache.score !== undefined) {
+      const s = cache.score;
+      const color = s >= 4 ? 'var(--green)' : s >= 3 ? '#3fb950cc' : s >= 2 ? 'var(--yellow)' : 'var(--text2)';
+      scoreTag = `<span style="color:${color};margin-left:3px;font-size:9px;font-weight:700;">${s}/5</span>`;
+    }
+    return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="changeSymbol('${c.symbol}')" title="${escAttr(cache?.detail)}">` +
+      `${c.label}${scoreTag}<span class="remove-btn" onclick="event.stopPropagation();removeCoin('${c.symbol}')">✕</span></span>`;
+  }).join('');
+}
+
+function selectRightCoin(sym) {
+  showSignalDetail(sym);
+  changeSymbol(sym);
+  setTimeout(() => {
+    document.getElementById('signalDetailCard').scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 100);
+}
+
+function showSignalDetail(sym) {
+  const data = rightSideResults.find(r => r.symbol === sym) || leftSideResults.find(r => r.symbol === sym) || rightSideCache[sym] || leftSideCache[sym];
+  if (!data) return;
+  const card = document.getElementById('signalDetailCard');
+  const label = data.label || sym.replace('USDT', '');
+  const isLeft = data.isLeftSide !== undefined;
+  const cardTitle = isLeft ? `${label} 左侧信号分析` : `${label} 右侧信号分析`;
+  const maxScore = isLeft ? 6 : 5;
+  const s = data.score || 0;
+  const pct = (s / maxScore) * 100;
+  const barColor = s >= maxScore ? 'var(--green)' : s >= maxScore - 1 ? '#3fb950cc' : s >= 3 ? 'var(--yellow)' : 'var(--red)';
+  const chg = data.change;
+  const chgStr = chg !== undefined ? `<span style="color:${chg >= 0 ? 'var(--green)' : 'var(--red)'};">${chg >= 0 ? '+' : ''}${chg.toFixed(2)}%</span>` : '';
+
+  const signals = (data.signals || []).map(sig => {
+    let icon = '─', color = 'var(--text2)';
+    if (sig.startsWith('✓')) { icon = '✓'; color = 'var(--green)'; }
+    else if (sig.startsWith('✗')) { icon = '✗'; color = 'var(--red)'; }
+    else if (sig.startsWith('⚠')) { icon = '⚠'; color = 'var(--yellow)'; }
+    else if (sig.startsWith('◐')) { icon = '◐'; color = 'var(--yellow)'; }
+    return `<div class="sd-signal-item"><span style="color:${color};font-weight:700;width:16px;">${icon}</span><span>${sig.slice(2)}</span></div>`;
+  }).join('');
+
+  card.innerHTML = `
+    <div class="sd-header">
+      <h3>${cardTitle}</h3>
+      <button class="sd-close" onclick="closeSignalDetail()">✕</button>
+    </div>
+    <div class="sd-score">
+      <span style="font-weight:700;font-size:18px;color:${barColor};">${s}/${maxScore}</span>
+      <div class="sd-score-bar"><div class="sd-score-fill" style="width:${pct}%;background:${barColor};"></div></div>
+      <span style="font-size:12px;color:var(--text2);">${isLeft ? (s >= 5 ? '深度超跌' : s >= 3 ? '左侧机会' : '信号不足') : (s >= 4 ? '强势右侧' : s >= 3 ? '右侧确认' : '信号不足')}</span>
+    </div>
+    <div class="sd-signals">${signals}</div>
+    <div class="sd-meta">
+      <span>24h: ${chgStr}</span>
+      <span>周期: ${filterTF}</span>
+      <span>扫描时间: ${new Date(data.ts).toLocaleTimeString('zh-CN', { hour12: false })}</span>
+    </div>
+  `;
+  card.classList.add('show');
+}
+
+function closeSignalDetail() {
+  document.getElementById('signalDetailCard').classList.remove('show');
 }
 
 function toggleEdit() {
@@ -1049,9 +1429,62 @@ function toggleEdit() {
   renderCoinTabs();
 }
 
+let allTopSymbols = [];
+let topSymbolsLoaded = false;
+
+async function loadTopSymbolsForDropdown() {
+  if (topSymbolsLoaded) return;
+  try {
+    const res = await fetch('/api/top-symbols?limit=500');
+    allTopSymbols = await res.json();
+    topSymbolsLoaded = true;
+  } catch (e) { console.error('loadTopSymbols', e); }
+}
+
+function openCoinDropdown() {
+  loadTopSymbolsForDropdown().then(() => filterCoinDropdown());
+  const dd = document.getElementById('coinDropdown');
+  dd.classList.add('show');
+}
+
+function closeCoinDropdown() {
+  setTimeout(() => {
+    document.getElementById('coinDropdown').classList.remove('show');
+  }, 150);
+}
+
+function filterCoinDropdown() {
+  const input = document.getElementById('coinSearchInput');
+  const dd = document.getElementById('coinDropdown');
+  const q = input.value.toUpperCase().trim();
+  const existing = new Set(presetCoins.map(c => c.symbol));
+  let filtered = allTopSymbols.filter(s => !existing.has(s.symbol));
+  if (q) filtered = filtered.filter(s => s.symbol.includes(q));
+  filtered = filtered.slice(0, 30);
+  if (filtered.length === 0) {
+    dd.innerHTML = '<div class="coin-dropdown-empty">无匹配结果</div>';
+  } else {
+    dd.innerHTML = filtered.map(s => `<div class="coin-dropdown-item" onmousedown="addCoinFromDropdown('${s.symbol}')">
+      <span>${s.symbol.replace('USDT','')}</span>
+      <span class="vol">${formatUSDT(s.volume)}</span>
+    </div>`).join('');
+  }
+  dd.classList.add('show');
+}
+
+function addCoinFromDropdown(sym) {
+  const label = sym.replace('USDT', '');
+  if (presetCoins.some(c => c.symbol === sym)) return;
+  presetCoins.push({ symbol: sym, label });
+  saveCoins();
+  document.getElementById('coinSearchInput').value = '';
+  document.getElementById('coinDropdown').classList.remove('show');
+  renderCoinTabs();
+}
+
 function addCoin() {
-  const input = document.getElementById('addCoinInput');
-  let val = input.value.toUpperCase().trim();
+  const input = document.getElementById('coinSearchInput');
+  let val = (input ? input.value : '').toUpperCase().trim();
   if (!val) return;
   if (!val.endsWith('USDT')) val += 'USDT';
   const label = val.replace('USDT', '');
@@ -1066,6 +1499,431 @@ function removeCoin(sym) {
   presetCoins = presetCoins.filter(c => c.symbol !== sym);
   saveCoins();
   renderCoinTabs();
+}
+
+// --- Right-side trading filter ---
+const FILTER_DEFS = [
+  { id: 'all', label: '全部' },
+  { id: 'right_side', label: '右侧交易' },
+  { id: 'left_side', label: '左侧交易' },
+];
+
+function renderFilterTabs() {
+  const el = document.getElementById('filterBar');
+  const tabs = FILTER_DEFS.map(f => {
+    const isActive = f.id === activeFilter;
+    let badge = '';
+    let extra = '';
+    if (f.id === 'right_side') {
+      if (rightSideCoins.size > 0) badge = `<span class="badge">${rightSideCoins.size}</span>`;
+      if (rightSideLoading && activeFilter === 'right_side' && scanProgress.total > 0) {
+        extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
+      }
+    }
+    if (f.id === 'left_side') {
+      if (leftSideCoins.size > 0) badge = `<span class="badge">${leftSideCoins.size}</span>`;
+      if (rightSideLoading && activeFilter === 'left_side' && scanProgress.total > 0) {
+        extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
+      }
+    }
+    const loading = f.id === 'right_side' && rightSideLoading ? ' loading' : '';
+    return `<span class="filter-tab${isActive ? ' active' : ''}${loading}" onclick="switchFilter('${f.id}')">${f.label}${extra}${badge}</span>`;
+  }).join('');
+
+  const tfBtns = FILTER_TF_OPTIONS.map(t =>
+    `<span class="filter-pill${t.value === filterTF ? ' active' : ''}" onclick="switchFilterTF('${t.value}')">${t.label}</span>`
+  ).join('');
+
+  const rangeBtns = SCAN_RANGE_OPTIONS.map(r =>
+    `<span class="filter-pill${r.value === scanTopLimit ? ' active' : ''}" onclick="switchScanRange(${r.value})">${r.label}</span>`
+  ).join('');
+
+  const sortBtns = SORT_OPTIONS.map(s =>
+    `<span class="filter-pill${s.value === sortBy ? ' active' : ''}" onclick="switchSort('${s.value}')">${s.label}</span>`
+  ).join('');
+
+  el.innerHTML = `
+    <div class="filter-tabs">${tabs}</div>
+    <span class="filter-sep"></span>
+    <div class="filter-group"><span class="filter-group-label">周期</span>${tfBtns}</div>
+    <span class="filter-sep"></span>
+    <div class="filter-group"><span class="filter-group-label">范围</span>${rangeBtns}</div>
+    <span class="filter-sep"></span>
+    <div class="filter-group"><span class="filter-group-label">排序</span>${sortBtns}</div>
+  `;
+}
+
+function switchFilter(filterId) {
+  activeFilter = filterId;
+  saveFilterSettings();
+  renderFilterTabs();
+  if (filterId === 'right_side' && rightSideCoins.size === 0 && !rightSideLoading) {
+    scanRightSideCoins();
+  }
+  if (filterId === 'left_side' && leftSideCoins.size === 0 && !rightSideLoading) {
+    scanLeftSideCoins();
+  }
+  renderCoinTabs();
+}
+
+function clearAllScanCache() {
+  rightSideCache = {};
+  rightSideCoins.clear();
+  rightSideResults = [];
+  leftSideCache = {};
+  leftSideCoins.clear();
+  leftSideResults = [];
+}
+
+function switchFilterTF(tf) {
+  if (tf === filterTF) return;
+  filterTF = tf;
+  saveFilterSettings();
+  clearAllScanCache();
+  renderFilterTabs();
+  renderCoinTabs();
+  if (activeFilter === 'right_side') scanRightSideCoins();
+  else if (activeFilter === 'left_side') scanLeftSideCoins();
+}
+
+function switchScanRange(n) {
+  if (n === scanTopLimit) return;
+  scanTopLimit = n;
+  saveFilterSettings();
+  clearAllScanCache();
+  renderFilterTabs();
+  renderCoinTabs();
+  if (activeFilter === 'right_side') scanRightSideCoins();
+  else if (activeFilter === 'left_side') scanLeftSideCoins();
+}
+
+function switchSort(s) {
+  if (s === sortBy) return;
+  sortBy = s;
+  saveFilterSettings();
+  sortRightSideResults();
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+function sortRightSideResults() {
+  switch (sortBy) {
+    case 'score':
+      rightSideResults.sort((a, b) => (b.score || 0) - (a.score || 0));
+      break;
+    case 'change':
+      rightSideResults.sort((a, b) => (b.change || 0) - (a.change || 0));
+      break;
+    case 'volume':
+      rightSideResults.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+      break;
+  }
+}
+
+function calcMACD(closes) {
+  const ema = (data, period) => {
+    const k = 2 / (period + 1);
+    const result = [data[0]];
+    for (let i = 1; i < data.length; i++) {
+      result.push(data[i] * k + result[i - 1] * (1 - k));
+    }
+    return result;
+  };
+  const ema12 = ema(closes, 12);
+  const ema26 = ema(closes, 26);
+  const dif = ema12.map((v, i) => v - ema26[i]);
+  const dea = ema(dif, 9);
+  return { dif, dea, macd: dif.map((v, i) => (v - dea[i]) * 2) };
+}
+
+async function checkCoinRightSide(sym) {
+  const cached = rightSideCache[sym];
+  if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached;
+  try {
+    const res = await fetch(`/api/klines?symbol=${sym}&interval=${filterTF}&limit=100`);
+    const raw = await res.json();
+    if (raw.error || !Array.isArray(raw) || raw.length < 30) {
+      return { ts: Date.now(), isRightSide: false, score: 0, signals: [], detail: '数据不足' };
+    }
+    const closes = raw.map(k => parseFloat(k[4]));
+    const volumes = raw.map(k => parseFloat(k[5]));
+    const lastPrice = closes[closes.length - 1];
+
+    const signals = [];
+    let score = 0;
+
+    // 1. MA trend: price > MA20 && MA5 > MA20
+    const ma5 = calcMA(closes, 5);
+    const ma20 = calcMA(closes, 20);
+    const lastMA5 = ma5[ma5.length - 1];
+    const lastMA20 = ma20[ma20.length - 1];
+    if (lastMA5 !== null && lastMA20 !== null) {
+      const priceAboveMA20 = lastPrice > lastMA20;
+      const ma5AboveMA20 = lastMA5 > lastMA20;
+      if (priceAboveMA20 && ma5AboveMA20) {
+        score += 2;
+        signals.push('✓ 均线多排(价>MA20, MA5>MA20)');
+      } else if (priceAboveMA20) {
+        score += 1;
+        signals.push('◐ 价格站上MA20');
+      } else {
+        signals.push('✗ 价格未站上MA20');
+      }
+    }
+
+    // 2. RSI(6) > 50
+    const rsi6 = calcRSI(closes, 6);
+    const lastRSI = rsi6.filter(v => v !== null).pop();
+    if (lastRSI !== null && lastRSI !== undefined) {
+      if (lastRSI > 50 && lastRSI < 80) {
+        score += 1;
+        signals.push(`✓ RSI6=${lastRSI.toFixed(1)} (强势区)`);
+      } else if (lastRSI >= 80) {
+        signals.push(`⚠ RSI6=${lastRSI.toFixed(1)} (超买)`);
+      } else {
+        signals.push(`✗ RSI6=${lastRSI.toFixed(1)} (弱势)`);
+      }
+    }
+
+    // 3. MACD golden cross (DIF > DEA)
+    const { dif, dea } = calcMACD(closes);
+    const lastDIF = dif[dif.length - 1];
+    const lastDEA = dea[dea.length - 1];
+    const prevDIF = dif[dif.length - 2];
+    const prevDEA = dea[dea.length - 2];
+    if (lastDIF > lastDEA) {
+      if (prevDIF <= prevDEA) {
+        score += 2;
+        signals.push('✓ MACD刚金叉');
+      } else {
+        score += 1;
+        signals.push('✓ MACD多头(DIF>DEA)');
+      }
+    } else {
+      signals.push('✗ MACD空头');
+    }
+
+    // 4. Volume surge: recent 3 bars avg > prev 20 bars avg * 1.5
+    if (volumes.length >= 23) {
+      const recentVol = (volumes.slice(-3).reduce((a, b) => a + b, 0)) / 3;
+      const prevVol = (volumes.slice(-23, -3).reduce((a, b) => a + b, 0)) / 20;
+      if (prevVol > 0 && recentVol > prevVol * 1.5) {
+        score += 1;
+        signals.push(`✓ 放量(${(recentVol / prevVol).toFixed(1)}x)`);
+      } else {
+        signals.push(`✗ 未放量(${(recentVol / prevVol).toFixed(1)}x)`);
+      }
+    }
+
+    // Score >= 3 is considered right-side
+    const isRightSide = score >= 3;
+    const detail = `[${score}/5] ${signals.join(' | ')}`;
+
+    const result = { ts: Date.now(), isRightSide, score, signals, detail };
+    rightSideCache[sym] = result;
+    return result;
+  } catch (e) {
+    return { ts: Date.now(), isRightSide: false, score: 0, signals: [], detail: '请求失败' };
+  }
+}
+
+let scanTopLimit = savedFilterSettings.scanTopLimit || 200;
+let scanProgress = { done: 0, total: 0 };
+let rightSideResults = [];
+let leftSideCoins = new Set();
+let leftSideResults = [];
+let leftSideCache = {};
+
+async function pMap(items, fn, concurrency = 5) {
+  const results = [];
+  let idx = 0;
+  async function worker() {
+    while (idx < items.length) {
+      const i = idx++;
+      results[i] = await fn(items[i], i);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(concurrency, items.length) }, () => worker()));
+  return results;
+}
+
+async function checkCoinLeftSide(sym) {
+  const cached = leftSideCache[sym];
+  if (cached && Date.now() - cached.ts < 5 * 60 * 1000) return cached;
+  try {
+    const res = await fetch(`/api/klines?symbol=${sym}&interval=${filterTF}&limit=100`);
+    const raw = await res.json();
+    if (raw.error || !Array.isArray(raw) || raw.length < 30) {
+      return { ts: Date.now(), isLeftSide: false, score: 0, signals: [], detail: '数据不足' };
+    }
+    const closes = raw.map(k => parseFloat(k[4]));
+    const volumes = raw.map(k => parseFloat(k[5]));
+    const lastPrice = closes[closes.length - 1];
+    const signals = [];
+    let score = 0;
+
+    // 1. RSI(6) < 30 (oversold)
+    const rsi6 = calcRSI(closes, 6);
+    const lastRSI = rsi6.filter(v => v !== null).pop();
+    if (lastRSI !== null && lastRSI !== undefined) {
+      if (lastRSI < 30) {
+        score += 2;
+        signals.push(`✓ RSI6=${lastRSI.toFixed(1)} (超卖)`);
+      } else if (lastRSI < 40) {
+        score += 1;
+        signals.push(`◐ RSI6=${lastRSI.toFixed(1)} (偏弱)`);
+      } else {
+        signals.push(`✗ RSI6=${lastRSI.toFixed(1)} (非超卖)`);
+      }
+    }
+
+    // 2. Price far below MA20
+    const ma20 = calcMA(closes, 20);
+    const lastMA20 = ma20[ma20.length - 1];
+    if (lastMA20 !== null) {
+      const deviation = (lastPrice - lastMA20) / lastMA20;
+      if (deviation < -0.1) {
+        score += 2;
+        signals.push(`✓ 偏离MA20 ${(deviation * 100).toFixed(1)}% (深度超跌)`);
+      } else if (deviation < -0.05) {
+        score += 1;
+        signals.push(`◐ 偏离MA20 ${(deviation * 100).toFixed(1)}%`);
+      } else {
+        signals.push(`✗ 偏离MA20 ${(deviation * 100).toFixed(1)}% (未超跌)`);
+      }
+    }
+
+    // 3. MACD converging (DIF < DEA but gap narrowing)
+    const { dif, dea } = calcMACD(closes);
+    const lastDIF = dif[dif.length - 1];
+    const lastDEA = dea[dea.length - 1];
+    const prevDIF = dif[dif.length - 2];
+    const prevDEA = dea[dea.length - 2];
+    if (lastDIF < lastDEA) {
+      const lastGap = Math.abs(lastDIF - lastDEA);
+      const prevGap = Math.abs(prevDIF - prevDEA);
+      if (lastGap < prevGap) {
+        score += 1;
+        signals.push('✓ MACD空头收敛(即将金叉)');
+      } else {
+        signals.push('✗ MACD空头发散');
+      }
+    } else {
+      signals.push('✗ MACD已多头(非左侧)');
+    }
+
+    // 4. Volume shrinking (recent volume < avg, capitulation over)
+    if (volumes.length >= 23) {
+      const recentVol = (volumes.slice(-3).reduce((a, b) => a + b, 0)) / 3;
+      const prevVol = (volumes.slice(-23, -3).reduce((a, b) => a + b, 0)) / 20;
+      if (prevVol > 0 && recentVol < prevVol * 0.6) {
+        score += 1;
+        signals.push(`✓ 缩量(${(recentVol / prevVol).toFixed(1)}x 地量)`);
+      } else {
+        signals.push(`✗ 未缩量(${(recentVol / prevVol).toFixed(1)}x)`);
+      }
+    }
+
+    const isLeftSide = score >= 3;
+    const detail = `[${score}/6] ${signals.join(' | ')}`;
+    const result = { ts: Date.now(), isLeftSide, score, signals, detail };
+    leftSideCache[sym] = result;
+    return result;
+  } catch (e) {
+    return { ts: Date.now(), isLeftSide: false, score: 0, signals: [], detail: '请求失败' };
+  }
+}
+
+async function scanRightSideCoins() {
+  rightSideLoading = true;
+  scanProgress = { done: 0, total: 0 };
+  rightSideCoins.clear();
+  rightSideResults = [];
+  renderFilterTabs();
+  renderCoinTabs();
+
+  let symbols;
+  try {
+    const res = await fetch(`/api/top-symbols?limit=${scanTopLimit}`);
+    symbols = await res.json();
+    if (!Array.isArray(symbols)) throw new Error('bad response');
+  } catch (e) {
+    rightSideLoading = false;
+    renderFilterTabs();
+    return;
+  }
+
+  scanProgress.total = symbols.length;
+  renderFilterTabs();
+
+  await pMap(symbols, async (item) => {
+    const r = await checkCoinRightSide(item.symbol);
+    scanProgress.done++;
+    if (r.isRightSide) {
+      rightSideCoins.add(item.symbol);
+      rightSideResults.push({ symbol: item.symbol, label: item.symbol.replace('USDT', ''), ...r, volume: item.volume, change: item.change });
+      sortRightSideResults();
+      renderCoinTabs();
+    }
+    if (scanProgress.done % 10 === 0) renderFilterTabs();
+  }, 5);
+
+  rightSideLoading = false;
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+async function scanLeftSideCoins() {
+  rightSideLoading = true;
+  scanProgress = { done: 0, total: 0 };
+  leftSideCoins.clear();
+  leftSideResults = [];
+  renderFilterTabs();
+  renderCoinTabs();
+
+  let symbols;
+  try {
+    const res = await fetch(`/api/top-symbols?limit=${scanTopLimit}`);
+    symbols = await res.json();
+    if (!Array.isArray(symbols)) throw new Error('bad response');
+  } catch (e) {
+    rightSideLoading = false;
+    renderFilterTabs();
+    return;
+  }
+
+  scanProgress.total = symbols.length;
+  renderFilterTabs();
+
+  await pMap(symbols, async (item) => {
+    const r = await checkCoinLeftSide(item.symbol);
+    scanProgress.done++;
+    if (r.isLeftSide) {
+      leftSideCoins.add(item.symbol);
+      leftSideResults.push({ symbol: item.symbol, label: item.symbol.replace('USDT', ''), ...r, volume: item.volume, change: item.change });
+      sortLeftSideResults();
+      renderCoinTabs();
+    }
+    if (scanProgress.done % 10 === 0) renderFilterTabs();
+  }, 5);
+
+  rightSideLoading = false;
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+function sortLeftSideResults() {
+  switch (sortBy) {
+    case 'score':
+      leftSideResults.sort((a, b) => (b.score || 0) - (a.score || 0));
+      break;
+    case 'change':
+      leftSideResults.sort((a, b) => (a.change || 0) - (b.change || 0));
+      break;
+    case 'volume':
+      leftSideResults.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+      break;
+  }
 }
 
 function setupOverlay() {
@@ -1188,10 +2046,12 @@ if ([...intSelect.options].some(o => o.value === String(interval))) {
 }
 
 window.addEventListener('resize', () => { fetchData(); });
+renderFilterTabs();
 renderCoinTabs();
 renderTFTabs();
 fetchData();
 startCountdown();
+setTimeout(scanRightSideCoins, 2000);
 </script>
 </body>
 </html>

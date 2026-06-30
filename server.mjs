@@ -31,9 +31,10 @@ async function proxyBinance(path) {
 }
 
 async function handleAPI(symbol) {
-  const [price, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate] =
+  const [price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate] =
     await Promise.all([
       proxyBinance(`/fapi/v2/ticker/price?symbol=${symbol}`),
+      proxyBinance(`/fapi/v1/ticker/24hr?symbol=${symbol}`),
       proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=12`),
       proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=12`),
       proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=12`),
@@ -42,7 +43,7 @@ async function handleAPI(symbol) {
       proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=12`),
       proxyBinance(`/fapi/v1/premiumIndex?symbol=${symbol}`),
     ]);
-  return { price, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate };
+  return { price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate };
 }
 
 let FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';
@@ -86,6 +87,46 @@ const server = createServer(async (req, res) => {
   if (url.pathname === '/api/feishu-alert' && req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
     res.end();
+    return;
+  }
+
+  if (url.pathname === '/api/top-symbols') {
+    const limit = Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10));
+    try {
+      const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
+      const usdt = tickers
+        .filter(t => t.symbol.endsWith('USDT'))
+        .map(t => ({ symbol: t.symbol, volume: parseFloat(t.quoteVolume), price: parseFloat(t.lastPrice), change: parseFloat(t.priceChangePercent) }))
+        .sort((a, b) => b.volume - a.volume)
+        .slice(0, limit);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(usdt));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/marketcap') {
+    const sym = (url.searchParams.get('symbol') || 'BTCUSDT').replace('USDT', '').toLowerCase();
+    const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
+    try {
+      const searchRes = await fetch(`https://api.coingecko.com/api/v3/search?query=${sym}`);
+      if (!searchRes.ok) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
+      const searchData = await searchRes.json();
+      const coin = searchData.coins?.find(c => c.symbol?.toLowerCase() === sym) || searchData.coins?.[0];
+      if (!coin) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
+      const priceRes = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=usd&include_market_cap=true`);
+      if (!priceRes.ok) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
+      const priceData = await priceRes.json();
+      const entry = priceData[coin.id];
+      res.writeHead(200, headers);
+      res.end(JSON.stringify({ market_cap: entry?.usd_market_cap || 0 }));
+    } catch (e) {
+      res.writeHead(200, headers);
+      res.end(JSON.stringify({ market_cap: 0 }));
+    }
     return;
   }
 
