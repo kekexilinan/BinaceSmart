@@ -3209,6 +3209,38 @@ function renderBacktestPanel() {
     <div id="optimizeResult"></div>`;
 }
 
+function adaptiveBacktestScore(i, closes, ma7, ma25, rsi, macd, klines) {
+  const baseScore = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+  if (i < 30) return baseScore;
+
+  // Only recalculate regime every 5 bars for performance
+  if (!adaptiveBacktestScore._cache || adaptiveBacktestScore._cache.lastI < i - 4) {
+    const n = i + 1;
+    const recentCloses = closes.slice(Math.max(0, n - 60), n);
+    const recentKlines = klines.slice(Math.max(0, n - 60), n).map(k => {
+      if (k.high !== undefined) return k;
+      return { high: parseFloat(k[2] || 0), low: parseFloat(k[3] || 0), close: parseFloat(k[4] || 0) };
+    });
+    adaptiveBacktestScore._cache = {
+      lastI: i,
+      regime: detectMarketRegime(recentCloses, recentKlines),
+    };
+  }
+
+  const regime = adaptiveBacktestScore._cache.regime;
+  let long = baseScore.long, short = baseScore.short;
+  if (regime.regime === 'trending') {
+    if (regime.direction > 0) {
+      long = Math.round(long * 1.5);
+      short = Math.round(short * 0.4);
+    } else {
+      short = Math.round(short * 1.5);
+      long = Math.round(long * 0.4);
+    }
+  }
+  return { long, short, regime: regime.regime, direction: regime.direction };
+}
+
 async function runBacktest() {
   const sym = document.getElementById('btSymbol').value.toUpperCase();
   const interval = document.getElementById('btInterval').value;
@@ -3228,12 +3260,15 @@ async function runBacktest() {
     macd.histogram = macd.macd;
 
     let trades = [], position = null;
+    let regimeStats = { trending: 0, ranging: 0 };
+    adaptiveBacktestScore._cache = null;
     for (let i = 30; i < klines.length; i++) {
-      const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+      const score = adaptiveBacktestScore(i, closes, ma7, ma25, rsi, macd, klines);
+      if (score.regime) regimeStats[score.regime] = (regimeStats[score.regime] || 0) + 1;
       if (!position && score.long >= 3) {
-        position = { dir: 'long', entry: closes[i], entryIdx: i };
+        position = { dir: 'long', entry: closes[i], entryIdx: i, regime: score.regime };
       } else if (!position && score.short >= 3) {
-        position = { dir: 'short', entry: closes[i], entryIdx: i };
+        position = { dir: 'short', entry: closes[i], entryIdx: i, regime: score.regime };
       } else if (position) {
         const pnl = position.dir === 'long' ? (closes[i] / position.entry - 1) : (1 - closes[i] / position.entry);
         if (pnl <= -0.03 || pnl >= 0.05 || (position.dir === 'long' && score.short >= 3) || (position.dir === 'short' && score.long >= 3)) {
@@ -3272,12 +3307,27 @@ async function runBacktest() {
       </tr>`;
     }).join('');
 
+    // Regime breakdown
+    const trendTrades = trades.filter(t => t.regime === 'trending');
+    const rangeTrades = trades.filter(t => t.regime === 'ranging');
+    const trendPnl = trendTrades.reduce((s, t) => s + t.pnl, 0);
+    const rangePnl = rangeTrades.reduce((s, t) => s + t.pnl, 0);
+    const trendWR = trendTrades.length > 0 ? (trendTrades.filter(t => t.pnl > 0).length / trendTrades.length * 100).toFixed(1) : '--';
+    const rangeWR = rangeTrades.length > 0 ? (rangeTrades.filter(t => t.pnl > 0).length / rangeTrades.length * 100).toFixed(1) : '--';
+    const totalBars = klines.length - 30;
+    const trendPct = totalBars > 0 ? (regimeStats.trending / totalBars * 100).toFixed(0) : 0;
+
     resultDiv.innerHTML = `<div class="backtest-result">
       <div class="stat">交易次数 <span class="val">${trades.length}</span></div>
       <div class="stat">胜率 <span class="val" style="color:${wins/trades.length > 0.5 ? 'var(--green)':'var(--red)'}">${trades.length ? (wins/trades.length*100).toFixed(1) : 0}%</span></div>
       <div class="stat">总收益 <span class="val" style="color:${totalPnl>=0?'var(--green)':'var(--red)'}">${(totalPnl*100).toFixed(2)}%</span></div>
       <div class="stat">最大回撤 <span class="val" style="color:var(--red)">${(maxDD*100).toFixed(2)}%</span></div>
       <div class="stat">盈亏比 <span class="val">${trades.length ? (wins > 0 ? (trades.filter(t=>t.pnl>0).reduce((s,t)=>s+t.pnl,0)/wins / (trades.filter(t=>t.pnl<=0).length > 0 ? Math.abs(trades.filter(t=>t.pnl<=0).reduce((s,t)=>s+t.pnl,0)/(trades.length-wins)) : 1)).toFixed(2) : '0') : '--'}</span></div>
+      <div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--border);display:flex;gap:16px;font-size:11px;">
+        <span style="color:var(--text2);">行情分布: <b>趋势 ${trendPct}%</b> / 震荡 ${100-trendPct}%</span>
+        <span>趋势段: <b style="color:${trendPnl>=0?'var(--green)':'var(--red)'};">${(trendPnl*100).toFixed(1)}%</b> (${trendTrades.length}笔, 胜率${trendWR}%)</span>
+        <span>震荡段: <b style="color:${rangePnl>=0?'var(--green)':'var(--red)'};">${(rangePnl*100).toFixed(1)}%</b> (${rangeTrades.length}笔, 胜率${rangeWR}%)</span>
+      </div>
       <div style="margin-top:10px;font-size:12px;color:var(--text2);">收益曲线</div>
       <canvas id="equityCurve" width="800" height="180" style="width:100%;height:180px;margin-top:4px;border-radius:6px;background:var(--bg);"></canvas>
       <div style="margin-top:12px;font-size:12px;color:var(--text2);">交易明细</div>
@@ -3427,8 +3477,9 @@ async function runOptimize() {
     currentStrategy.conditions.forEach((c, i) => c.weight = testWeights[i]);
 
     let trades = [], position = null;
+    adaptiveBacktestScore._cache = null;
     for (let i = 30; i < klines.length; i++) {
-      const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+      const score = adaptiveBacktestScore(i, closes, ma7, ma25, rsi, macd, klines);
       if (!position && score.long >= 3) position = { dir: 'long', entry: closes[i], entryIdx: i };
       else if (!position && score.short >= 3) position = { dir: 'short', entry: closes[i], entryIdx: i };
       else if (position) {
@@ -3520,8 +3571,9 @@ async function runBatchBacktest() {
       macd.histogram = macd.macd;
 
       let trades = [], position = null;
+      adaptiveBacktestScore._cache = null;
       for (let i = 30; i < klines.length; i++) {
-        const score = calcStrategyScore(i, closes, ma7, ma25, rsi, macd, klines);
+        const score = adaptiveBacktestScore(i, closes, ma7, ma25, rsi, macd, klines);
         if (!position && score.long >= 3) {
           position = { dir: 'long', entry: closes[i], entryIdx: i };
         } else if (!position && score.short >= 3) {
