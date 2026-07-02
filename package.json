@@ -7,9 +7,10 @@
     "node": ">=20"
   },
   "scripts": {
-    "dev": "node server.mjs",
-    "monitor": "node smart-money.mjs SLXUSDT 60",
-    "monitor:btc": "node smart-money.mjs BTCUSDT 60",
-    "monitor:eth": "node smart-money.mjs ETHUSDT 60"
+    "dev": "node --use-env-proxy server.mjs",
+    "start": "node --use-env-proxy server.mjs",
+    "monitor": "node --use-env-proxy smart-money.mjs SLXUSDT 60",
+    "monitor:btc": "node --use-env-proxy smart-money.mjs BTCUSDT 60",
+    "monitor:eth": "node --use-env-proxy smart-money.mjs ETHUSDT 60"
   }
 }

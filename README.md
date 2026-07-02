@@ -79,6 +79,59 @@ node smart-money.mjs BTCUSDT 30
 | 买入激增 | 主动买卖比 > 1.2 |
 | 卖出激增 | 主动买卖比 < 0.8 |
 
+## 右侧稳趋势推送
+
+定时扫描 Top 200 USDT 合约币种，筛选符合「右侧稳趋势」条件的币种并推送到飞书。
+
+推送内容包含：价格、相对 8 点涨幅、评分、回撤、大户/全网多空比、连续推荐次数。
+
+自动过滤股票对应的币（COIN、MSTR、HOOD）。
+
+### 配置（.env）
+
+| 变量 | 默认值 | 说明 |
+|------|--------|------|
+| `FEISHU_WEBHOOK` | 无 | 飞书机器人 Webhook URL，必填 |
+| `STABLE_PUSH_HOURS` | `1` | 推送间隔（小时） |
+| `STABLE_PUSH_ENABLED` | `true` | 设为 `false` 可关闭推送 |
+| `STABLE_SCAN_LIMIT` | `200` | 扫描币种数量 |
+| `STABLE_MAX_DRAWDOWN` | `0.30` | 最大回撤阈值（30%） |
+
+### 手动触发推送
+
+```bash
+curl -X POST http://localhost:3388/api/trigger-stable-push
+```
+
+## 系统服务管理
+
+已配置为 systemd user service，开机自动启动。
+
+```bash
+# 查看服务状态
+systemctl --user status binance-monitor
+
+# 重启服务
+systemctl --user restart binance-monitor
+
+# 停止服务
+systemctl --user stop binance-monitor
+
+# 查看实时日志
+journalctl --user -u binance-monitor -f
+
+# 查看最近 100 行日志
+journalctl --user -u binance-monitor -n 100
+
+# 禁用开机自启
+systemctl --user disable binance-monitor
+
+# 重新启用开机自启
+systemctl --user enable binance-monitor
+```
+
+服务配置文件位于 `~/.config/systemd/user/binance-monitor.service`。
+
 ## API
 
 服务端代理币安合约 API，避免前端跨域问题：
@@ -86,6 +139,7 @@ node smart-money.mjs BTCUSDT 30
 - `GET /api/data?symbol=SLXUSDT` — 聪明钱全量数据
 - `GET /api/klines?symbol=SLXUSDT&interval=1h&limit=100` — K 线数据
 - `POST /api/feishu-alert` — 发送飞书报警
+- `POST /api/trigger-stable-push` — 手动触发稳趋势推送
 
 ## 技术栈
 
