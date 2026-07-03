@@ -6,6 +6,8 @@ import { dirname, join } from 'node:path';
 import { scanRightStable } from './scan-stable.mjs';
 import { fetchSmartSignal, analyzeSmartSignal, scanSmartSignal } from './scan-smart-signal.mjs';
 import { setupProxyFromEnv } from './proxy-setup.mjs';
+import { checkDumpRisk, scanDumpCoins, formatDumpPushContent } from './scan-dump-risk.mjs';
+import { scanShortSignals } from './scan-short-signal.mjs';
 
 // Load .env file
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -33,6 +35,26 @@ async function proxyBinance(path) {
   const res = await fetch(`${FAPI_BASE}${path}`);
   if (!res.ok) throw new Error(`Binance API ${res.status}: ${path}`);
   return res.json();
+}
+
+async function waitForNetworkReady(label = '币安 API', {
+  maxAttempts = 12,
+  initialDelayMs = 5000,
+  maxDelayMs = 60000,
+  probe = () => proxyBinance('/fapi/v1/ping'),
+} = {}) {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      await probe();
+      if (attempt > 1) console.log(`  ✓ ${label}已就绪（第 ${attempt} 次尝试）`);
+      return;
+    } catch (e) {
+      if (attempt === maxAttempts) throw new Error(`${label}未就绪: ${e.message}`);
+      const delay = Math.min(initialDelayMs * attempt, maxDelayMs);
+      console.log(`  ⏳ ${label}未就绪，${Math.round(delay / 1000)}s 后重试 (${attempt}/${maxAttempts})...`);
+      await new Promise(r => setTimeout(r, delay));
+    }
+  }
 }
 
 function getShanghaiParts(date = new Date()) {
@@ -173,6 +195,14 @@ const STABLE_PUSH_HOURS = parseFloat(process.env.STABLE_PUSH_HOURS || '4', 10);
 const STABLE_PUSH_ENABLED = process.env.STABLE_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const STABLE_SCAN_LIMIT = parseInt(process.env.STABLE_SCAN_LIMIT || '200', 10);
 const STABLE_MAX_DRAWDOWN = parseFloat(process.env.STABLE_MAX_DRAWDOWN || '0.30', 10);
+const DUMP_PUSH_HOURS = parseFloat(process.env.DUMP_PUSH_HOURS || '1');
+const DUMP_PUSH_ENABLED = process.env.DUMP_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const DUMP_SCAN_LIMIT = parseInt(process.env.DUMP_SCAN_LIMIT || '200', 10);
+const DUMP_MIN_RISK = parseInt(process.env.DUMP_MIN_RISK || '4', 10);
+const LONG_PUSH_HOURS = parseFloat(process.env.LONG_PUSH_HOURS || '1');
+const LONG_PUSH_ENABLED = process.env.LONG_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const LONG_SCAN_LIMIT = parseInt(process.env.LONG_SCAN_LIMIT || '200', 10);
+const LONG_MIN_SCORE = parseInt(process.env.LONG_MIN_SCORE || '3', 10);
 
 async function sendFeishu(title, content) {
   if (!FEISHU_WEBHOOK) throw new Error('FEISHU_WEBHOOK 未配置');
@@ -181,6 +211,24 @@ async function sendFeishu(title, content) {
     card: {
       header: { title: { tag: 'plain_text', content: title }, template: 'blue' },
       elements: [{ tag: 'markdown', content }],
+    },
+  };
+  const res = await fetch(FEISHU_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+  return res.json();
+}
+
+async function sendFeishuCardV2(title, elements, template = 'blue') {
+  if (!FEISHU_WEBHOOK) throw new Error('FEISHU_WEBHOOK 未配置');
+  const body = {
+    msg_type: 'interactive',
+    card: {
+      schema: '2.0',
+      header: { title: { tag: 'plain_text', content: title }, template },
+      body: { elements },
     },
   };
   const res = await fetch(FEISHU_WEBHOOK, {
@@ -218,6 +266,7 @@ async function runStableTrendPush() {
   stablePushRunning = true;
   try {
     console.log(`\n  📤 开始稳趋势扫描推送...`);
+    await waitForNetworkReady('币安 API', { maxAttempts: 6, initialDelayMs: 10000 });
     const results = await scanRightStable({
       limit: STABLE_SCAN_LIMIT,
       maxDrawdownPct: STABLE_MAX_DRAWDOWN,
@@ -259,49 +308,60 @@ async function runStableTrendPush() {
     stablePushHistory.push(new Set(resultSymbols));
     if (stablePushHistory.length > 100) stablePushHistory = stablePushHistory.slice(-100);
 
-    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-    const header = `**扫描时间:** ${now}\n**共 ${results.length} 个币种**\n\n`;
-    const footer = `\n\n_回撤≤${(STABLE_MAX_DRAWDOWN * 100).toFixed(0)}% · 1H+1D双周期 · Top${STABLE_SCAN_LIMIT}_`;
-    const lineStrs = results.map((c, i) => {
-      const chgEmoji = c.changeSince8am >= 5 ? '🚀' : c.changeSince8am >= 0 ? '🟢' : '🔴';
-      const chg = c.changeSince8am >= 0 ? `+${c.changeSince8am.toFixed(1)}%` : `${c.changeSince8am.toFixed(1)}%`;
-      const scoreEmoji = c.score >= 4 ? '🔥' : '⭐';
-      const parts = [
-        `${i + 1}. ${chgEmoji} **${c.label}** $${fmtPrice(c.price)} ${chg}(8am)`,
-        `${scoreEmoji}${c.score}/5`,
-        `📉${c.drawdown.toFixed(1)}%`,
-      ];
-      if (c.topVsGlobal != null) {
-        const whaleEmoji = c.topVsGlobal > 1.2 ? '🐋' : c.topVsGlobal < 0.8 ? '🦐' : '🐟';
-        parts.push(`${whaleEmoji}${c.topVsGlobal.toFixed(2)}`);
-      }
-      if (c.streak > 1) parts.push(`🔄${c.streak}次`);
-      return parts.join(' · ');
-    });
-    const MAX_CHARS = 28000;
-    const chunks = [];
-    let buf = header;
-    for (const line of lineStrs) {
-      const next = buf + line + '\n';
-      if (next.length > MAX_CHARS && buf.length > header.length) {
-        chunks.push(buf.trimEnd());
-        buf = header + line + '\n';
-      } else {
-        buf = next;
-      }
-    }
-    if (buf.length > header.length) chunks.push(buf.trimEnd() + footer);
+    results.sort((a, b) => b.streak - a.streak || b.score - a.score || b.change - a.change);
 
-    if (chunks.length === 0) {
-      await sendFeishu(`右侧稳趋势 · 0 个币种`, formatStablePushContent(results));
-    } else if (chunks.length === 1) {
-      await sendFeishu(`右侧稳趋势 · ${results.length} 个币种`, chunks[0]);
-    } else {
-      for (let i = 0; i < chunks.length; i++) {
-        await sendFeishu(`右侧稳趋势 · ${results.length} 个 (${i + 1}/${chunks.length})`, chunks[i]);
-      }
-    }
-    console.log(`  ✓ 稳趋势推送完成 (${results.length} 个币种${chunks.length > 1 ? `, ${chunks.length} 条消息` : ''})`);
+    const allSymbols = results.map(r => r.symbol);
+    const marketCaps = await batchFetchMarketCaps(allSymbols);
+
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const elements = [];
+    elements.push({ tag: 'markdown', content: `**扫描时间:** ${now}  **共 ${results.length} 个币种**` });
+    elements.push({
+      tag: 'table',
+      page_size: 10,
+      row_height: 'low',
+      freeze_first_column: true,
+      columns: [
+        { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+        { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
+        { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
+        { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
+        { name: 'score', display_name: '评分', data_type: 'lark_md', width: 'auto' },
+        { name: 'dd', display_name: '回撤', data_type: 'text', width: 'auto' },
+        { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
+        { name: 'whale', display_name: '大户比', data_type: 'text', width: 'auto' },
+        { name: 'streak', display_name: '连续', data_type: 'lark_md', width: 'auto' },
+      ],
+      rows: results.map(c => {
+        const chg8amVal = c.changeSince8am;
+        const chg8amColor = chg8amVal >= 5 ? 'green' : chg8amVal >= 0 ? 'turquoise' : 'red';
+        const chg8amIcon = chg8amVal >= 5 ? '🚀' : '';
+        const chg8amArrow = chg8amVal >= 5 ? '' : chg8amVal >= 0 ? '▲' : '▼';
+        const chg24hVal = c.change;
+        const chg24hColor = chg24hVal >= 5 ? 'green' : chg24hVal >= 0 ? 'turquoise' : 'red';
+        const chg24hIcon = chg24hVal >= 5 ? '🚀' : '';
+        const chg24hArrow = chg24hVal >= 5 ? '' : chg24hVal >= 0 ? '▲' : '▼';
+        const scoreIcon = c.score >= 5 ? '🔥' : c.score >= 4 ? '⭐' : '✦';
+        const scoreColor = c.score >= 5 ? 'green' : c.score >= 4 ? 'blue' : 'grey';
+        const streakIcon = c.streak >= 5 ? '🔥' : c.streak >= 3 ? '🔄' : '·';
+        const streakColor = c.streak >= 5 ? 'violet' : c.streak >= 3 ? 'blue' : 'grey';
+        return {
+          coin: c.label,
+          price: `$${fmtPrice(c.price)}`,
+          chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${chg8amVal >= 0 ? '+' : ''}${chg8amVal.toFixed(1)}%</font>`,
+          chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${chg24hVal >= 0 ? '+' : ''}${chg24hVal.toFixed(1)}%</font>`,
+          score: `${scoreIcon}<font color='${scoreColor}'>${c.score}/5</font>`,
+          dd: `${c.drawdown.toFixed(1)}%`,
+          mc: fmtMarketCap(marketCaps[c.symbol]),
+          whale: c.topVsGlobal != null ? c.topVsGlobal.toFixed(2) : '-',
+          streak: c.streak > 1 ? `${streakIcon}<font color='${streakColor}'>${c.streak}次</font>` : '-',
+        };
+      }),
+    });
+    elements.push({ tag: 'markdown', content: `_回撤≤${(STABLE_MAX_DRAWDOWN * 100).toFixed(0)}% · 1H+1D双周期 · Top${STABLE_SCAN_LIMIT} · 每${STABLE_PUSH_HOURS}h_` });
+
+    await sendFeishuCardV2(`右侧稳趋势 · ${results.length} 个币种`, elements, 'turquoise');
+    console.log(`  ✓ 稳趋势推送完成 (${results.length} 个币种)`);
   } catch (e) {
     console.warn(`  ⚠ 稳趋势推送失败: ${e.message}`);
   } finally {
@@ -343,6 +403,295 @@ function startStablePushScheduler() {
     console.log(`  ⏭ 下次推送: ${label}（${Math.round(delay / 60000)} 分钟后）`);
     setTimeout(async () => {
       await runStableTrendPush();
+      scheduleNext();
+    }, delay);
+  };
+  scheduleNext();
+}
+
+function fmtMarketCap(mc) {
+  if (!mc || mc <= 0) return '?';
+  if (mc >= 1e12) return `${(mc / 1e12).toFixed(2)}万亿`;
+  if (mc >= 1e8) return `${(mc / 1e8).toFixed(1)}亿`;
+  if (mc >= 1e4) return `${(mc / 1e4).toFixed(0)}万`;
+  return `${mc.toFixed(0)}`;
+}
+
+async function batchFetchMarketCaps(symbols) {
+  const result = {};
+  const syms = [...new Set(symbols.map(s => s.replace('USDT', '').toLowerCase()))];
+  try {
+    const searchRes = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false`);
+    if (!searchRes.ok) return result;
+    const data = await searchRes.json();
+    const lookup = new Map(data.map(c => [c.symbol.toLowerCase(), c.market_cap || 0]));
+    for (const s of syms) {
+      result[s.toUpperCase() + 'USDT'] = lookup.get(s) || 0;
+    }
+  } catch {}
+  return result;
+}
+
+let combinedPushRunning = false;
+let longPushHistory = [];
+const COMBINED_TOP_N = 20;
+
+async function runCombinedPush() {
+  if (combinedPushRunning) return;
+  const longEnabled = LONG_PUSH_ENABLED;
+  const dumpEnabled = DUMP_PUSH_ENABLED;
+  if (!longEnabled && !dumpEnabled) return;
+  combinedPushRunning = true;
+  try {
+    console.log(`\n  📤 开始做多+做空+暴跌联合扫描...`);
+    await waitForNetworkReady('币安 API', { maxAttempts: 6, initialDelayMs: 10000 });
+
+    let longResults = [];
+    let shortResults = [];
+    let dumpResults = [];
+
+    const tasks = [];
+    if (longEnabled) tasks.push((async () => {
+      const allResults = await scanRightStable({
+        limit: LONG_SCAN_LIMIT,
+        maxDrawdownPct: 0.20,
+        dualTFConfirm: true,
+        filterTF: '1h',
+        concurrency: 3,
+      });
+      const filtered = allResults.filter(r => r.score >= LONG_MIN_SCORE);
+      const resultSymbols = filtered.map(r => r.symbol);
+
+      const { prices: baselines } = await load8amBaselinePrices(resultSymbols);
+      for (const r of filtered) {
+        const base = baselines[r.symbol];
+        r.changeSince8am = base && base > 0 ? ((r.price - base) / base) * 100 : r.change;
+      }
+
+      const symbolMap = new Map(filtered.map(r => [r.symbol, r]));
+      await pmap(resultSymbols, async (sym) => {
+        const [topAccounts, globalRatio] = await Promise.all([
+          proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${sym}&period=1h&limit=1`),
+          proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=1h&limit=1`),
+        ]);
+        const r = symbolMap.get(sym);
+        if (r) {
+          r.topRatio = parseFloat(topAccounts[0]?.longShortRatio) || 0;
+          r.globalRatio = parseFloat(globalRatio[0]?.longShortRatio) || 0;
+          r.topVsGlobal = r.globalRatio > 0 ? r.topRatio / r.globalRatio : null;
+        }
+      }, 10);
+
+      for (const r of filtered) {
+        let count = 1;
+        for (let i = longPushHistory.length - 1; i >= 0; i--) {
+          if (longPushHistory[i].has(r.symbol)) count++;
+          else break;
+        }
+        r.streak = count;
+      }
+      longPushHistory.push(new Set(resultSymbols));
+      if (longPushHistory.length > 100) longPushHistory = longPushHistory.slice(-100);
+
+      filtered.sort((a, b) => b.streak - a.streak || b.score - a.score || b.changeSince8am - a.changeSince8am);
+      longResults = filtered.slice(0, COMBINED_TOP_N);
+    })());
+
+    if (dumpEnabled) tasks.push((async () => {
+      const results = await scanDumpCoins({
+        limit: DUMP_SCAN_LIMIT,
+        minRiskScore: DUMP_MIN_RISK,
+        concurrency: 3,
+      });
+      dumpResults = results.slice(0, COMBINED_TOP_N);
+    })());
+
+    tasks.push((async () => {
+      try {
+        const results = await scanShortSignals({ limit: 100, minScore: 4, concurrency: 3 });
+        shortResults = results.slice(0, COMBINED_TOP_N);
+      } catch (e) {
+        console.warn(`  ⚠ 做空扫描异常: ${e.message}`);
+      }
+    })());
+
+    await Promise.all(tasks);
+
+    if (!longResults.length && !shortResults.length && !dumpResults.length) {
+      console.log(`  ✓ 联合扫描完成，当前无做多/做空/暴跌信号`);
+      return;
+    }
+
+    const allSymbols = [
+      ...longResults.map(r => r.symbol),
+      ...shortResults.map(r => r.symbol),
+      ...dumpResults.map(r => r.symbol),
+    ];
+    const marketCaps = await batchFetchMarketCaps(allSymbols);
+
+    const dumpSymbols = dumpResults.map(r => r.symbol);
+    const { prices: dumpBaselines } = await load8amBaselinePrices(dumpSymbols);
+    for (const r of dumpResults) {
+      const base = dumpBaselines[r.symbol];
+      r.changeSince8am = base && base > 0 ? ((r.price - base) / base) * 100 : r.change24h;
+    }
+
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const elements = [];
+
+    elements.push({ tag: 'markdown', content: `**扫描时间:** ${now}` });
+
+    if (longResults.length) {
+      elements.push({ tag: 'markdown', content: `**📈 做多推荐 · ${longResults.length} 个** (评分≥${LONG_MIN_SCORE}/5 · 回撤≤20%)` });
+      elements.push({
+        tag: 'table',
+        page_size: 10,
+        row_height: 'low',
+        freeze_first_column: true,
+        columns: [
+          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
+          { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
+          { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
+          { name: 'score', display_name: '评分', data_type: 'lark_md', width: 'auto' },
+          { name: 'dd', display_name: '回撤', data_type: 'text', width: 'auto' },
+          { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
+          { name: 'whale', display_name: '大户比', data_type: 'text', width: 'auto' },
+          { name: 'streak', display_name: '连续', data_type: 'lark_md', width: 'auto' },
+        ],
+        rows: longResults.map(c => {
+          const chg8amVal = c.changeSince8am;
+          const chg8amColor = chg8amVal >= 5 ? 'green' : chg8amVal >= 0 ? 'turquoise' : 'red';
+          const chg8amIcon = chg8amVal >= 5 ? '🚀' : '';
+          const chg8amArrow = chg8amVal >= 5 ? '' : chg8amVal >= 0 ? '▲' : '▼';
+          const chg24hVal = c.change;
+          const chg24hColor = chg24hVal >= 5 ? 'green' : chg24hVal >= 0 ? 'turquoise' : 'red';
+          const chg24hIcon = chg24hVal >= 5 ? '🚀' : '';
+          const chg24hArrow = chg24hVal >= 5 ? '' : chg24hVal >= 0 ? '▲' : '▼';
+          const scoreIcon = c.score >= 5 ? '🔥' : c.score >= 4 ? '⭐' : '✦';
+          const scoreColor = c.score >= 5 ? 'green' : c.score >= 4 ? 'blue' : 'grey';
+          const streakIcon = c.streak >= 5 ? '🔥' : c.streak >= 3 ? '🔄' : '·';
+          const streakColor = c.streak >= 5 ? 'violet' : c.streak >= 3 ? 'blue' : 'grey';
+          return {
+            coin: c.label,
+            price: `$${fmtPrice(c.price)}`,
+            chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${chg8amVal >= 0 ? '+' : ''}${chg8amVal.toFixed(1)}%</font>`,
+            chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${chg24hVal >= 0 ? '+' : ''}${chg24hVal.toFixed(1)}%</font>`,
+            score: `${scoreIcon}<font color='${scoreColor}'>${c.score}/5</font>`,
+            dd: `${c.drawdown.toFixed(1)}%`,
+            mc: fmtMarketCap(marketCaps[c.symbol]),
+            whale: c.topVsGlobal != null ? c.topVsGlobal.toFixed(2) : '-',
+            streak: c.streak > 1 ? `${streakIcon}<font color='${streakColor}'>${c.streak}次</font>` : '-',
+          };
+        }),
+      });
+    }
+
+    if (shortResults.length) {
+      elements.push({ tag: 'markdown', content: `**📉 做空推荐 · ${shortResults.length} 个** (暴涨回落/高位横盘)` });
+      elements.push({
+        tag: 'table',
+        page_size: 10,
+        row_height: 'low',
+        freeze_first_column: true,
+        columns: [
+          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
+          { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
+          { name: 'dd', display_name: '峰值跌', data_type: 'lark_md', width: 'auto' },
+          { name: 'score', display_name: '做空分', data_type: 'lark_md', width: 'auto' },
+          { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
+          { name: 'tags', display_name: '信号', data_type: 'text', width: 'auto' },
+        ],
+        rows: shortResults.map(r => {
+          const chg24hColor = r.chg24h > 50 ? 'green' : r.chg24h > 0 ? 'turquoise' : 'red';
+          const chg24hIcon = r.chg24h > 50 ? '🚀' : r.chg24h > 0 ? '▲' : '▼';
+          const ddColor = r.ddFromPeak > 20 ? 'red' : 'orange';
+          const scoreColor = r.shortScore >= 7 ? 'red' : r.shortScore >= 5 ? 'orange' : 'grey';
+          return {
+            coin: r.label,
+            price: `$${fmtPrice(r.price)}`,
+            chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${r.chg24h >= 0 ? '+' : ''}${r.chg24h.toFixed(0)}%</font>`,
+            dd: `<font color='${ddColor}'>▼${r.ddFromPeak.toFixed(0)}%</font>`,
+            score: `<font color='${scoreColor}'>${r.shortScore}分</font>`,
+            mc: fmtMarketCap(marketCaps[r.symbol]),
+            tags: r.signals.slice(0, 3).map(s => s.tag).join(' '),
+          };
+        }),
+      });
+    }
+
+    if (dumpResults.length) {
+      const highRisk = dumpResults.filter(r => r.riskLevel === 'high');
+      const warnRisk = dumpResults.filter(r => r.riskLevel === 'warn');
+      elements.push({ tag: 'markdown', content: `**🚨 暴跌预警 · ${highRisk.length} 高危 ${warnRisk.length} 警告**` });
+      elements.push({
+        tag: 'table',
+        page_size: 10,
+        row_height: 'low',
+        freeze_first_column: true,
+        columns: [
+          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
+          { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
+          { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
+          { name: 'risk', display_name: '风险分', data_type: 'lark_md', width: 'auto' },
+          { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
+          { name: 'tags', display_name: '风险标签', data_type: 'text', width: 'auto' },
+        ],
+        rows: [...highRisk, ...warnRisk].map(r => {
+          const chg8amColor = r.changeSince8am >= 0 ? 'turquoise' : r.changeSince8am <= -10 ? 'red' : 'orange';
+          const chg8amIcon = r.changeSince8am <= -10 ? '💀' : '';
+          const chg8amArrow = r.changeSince8am <= -10 ? '' : r.changeSince8am >= 0 ? '▲' : '▼';
+          const chg24hColor = r.change24h >= 0 ? 'turquoise' : r.change24h <= -10 ? 'red' : 'orange';
+          const chg24hIcon = r.change24h <= -10 ? '💀' : '';
+          const chg24hArrow = r.change24h <= -10 ? '' : r.change24h >= 0 ? '▲' : '▼';
+          const riskColor = r.riskLevel === 'high' ? 'red' : 'orange';
+          const riskIcon = r.riskLevel === 'high' ? '🚨' : '⚠️';
+          return {
+            coin: r.label,
+            price: `$${fmtPrice(r.price)}`,
+            chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${r.changeSince8am >= 0 ? '+' : ''}${r.changeSince8am.toFixed(1)}%</font>`,
+            chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${r.change24h >= 0 ? '+' : ''}${r.change24h.toFixed(1)}%</font>`,
+            risk: `${riskIcon}<font color='${riskColor}'>${r.riskScore}</font>`,
+            mc: fmtMarketCap(marketCaps[r.symbol]),
+            tags: r.risks.slice(0, 3).map(x => `${x.level}${x.tag}`).join(' '),
+          };
+        }),
+      });
+    }
+
+    elements.push({ tag: 'markdown', content: `_每小时整点 · Top${LONG_SCAN_LIMIT} · 各取前${COMBINED_TOP_N}_` });
+
+    const titleParts = [];
+    if (longResults.length) titleParts.push(`📈${longResults.length}做多`);
+    if (shortResults.length) titleParts.push(`📉${shortResults.length}做空`);
+    if (dumpResults.length) titleParts.push(`🚨${dumpResults.length}预警`);
+    const title = `整点扫描 · ${titleParts.join(' · ')}`;
+
+    await sendFeishuCardV2(title, elements);
+    console.log(`  ✓ 联合推送完成 (做多 ${longResults.length} + 做空 ${shortResults.length} + 暴跌 ${dumpResults.length})`);
+  } catch (e) {
+    console.warn(`  ⚠ 联合推送失败: ${e.message}`);
+  } finally {
+    combinedPushRunning = false;
+  }
+}
+
+function startCombinedPushScheduler() {
+  if (!LONG_PUSH_ENABLED && !DUMP_PUSH_ENABLED) {
+    console.log(`  ⏸ 做多+暴跌推送均未启用（需配置 FEISHU_WEBHOOK）`);
+    return;
+  }
+  console.log(`  🔔 做多+暴跌联合推送: 上海时间每小时整点 → 飞书`);
+
+  const scheduleNext = () => {
+    const next = getNextStablePushTime(new Date(), 1);
+    const delay = Math.max(0, next.getTime() - Date.now());
+    const label = next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    console.log(`  ⏭ 联合推送下次: ${label}（${Math.round(delay / 60000)} 分钟后）`);
+    setTimeout(async () => {
+      await runCombinedPush();
       scheduleNext();
     }, delay);
   };
@@ -503,6 +852,62 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/check-risk') {
+    const symbol = (url.searchParams.get('symbol') || '').toUpperCase();
+    if (!symbol || !symbol.endsWith('USDT')) {
+      res.writeHead(400, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: '请提供 symbol 参数，如 ?symbol=VELVETUSDT' }));
+      return;
+    }
+    try {
+      const risk = await checkDumpRisk(symbol);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(risk));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/scan-dump') {
+    const limit = Math.min(300, parseInt(url.searchParams.get('limit') || '200', 10));
+    const minRisk = parseInt(url.searchParams.get('minRisk') || '4', 10);
+    try {
+      const results = await scanDumpCoins({ limit, minRiskScore: minRisk, concurrency: 3 });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(results));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-combined-push' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (combinedPushRunning) {
+      res.writeHead(409, headers);
+      res.end(JSON.stringify({ ok: false, error: '联合推送正在进行中，请稍后再试' }));
+      return;
+    }
+    if (!FEISHU_WEBHOOK) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'FEISHU_WEBHOOK 未配置' }));
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发做多+暴跌联合推送' }));
+    runCombinedPush();
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-combined-push' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/scan-smart-signal') {
     const limit = Math.min(200, parseInt(url.searchParams.get('limit') || '100', 10));
     const direction = ['long', 'short', 'all'].includes(url.searchParams.get('direction'))
@@ -539,11 +944,15 @@ server.listen(PORT, () => {
   }
   console.log(`  📊 默认监控: SLXUSDT`);
   console.log(`  ⏹  Ctrl+C 退出\n`);
-  // 预热8点基准价缓存，避免首次打开涨幅榜等待过久
-  handleGainersSince8am(10).then(() => {
-    console.log(`  ✓ 8点涨幅基准价缓存已预热`);
-  }).catch(e => {
-    console.warn(`  ⚠ 8点基准价预热失败: ${e.message}`);
-  });
+  // 预热8点基准价缓存，避免首次打开涨幅榜等待过久（开机时等待网络就绪）
+  waitForNetworkReady('币安 API')
+    .then(() => handleGainersSince8am(10))
+    .then(() => {
+      console.log(`  ✓ 8点涨幅基准价缓存已预热`);
+    })
+    .catch(e => {
+      console.warn(`  ⚠ 8点基准价预热失败: ${e.message}`);
+    });
   startStablePushScheduler();
+  startCombinedPushScheduler();
 });

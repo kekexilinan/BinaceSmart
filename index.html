@@ -2194,6 +2194,37 @@ function renderCoinTabs() {
     return;
   }
 
+  if (activeFilter === 'dump_risk') {
+    if (dumpRiskResults.length === 0 && !dumpRiskLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--green);">当前无高危暴跌币种 ✅</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    if (dumpRiskResults.length === 0 && dumpRiskLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">全市场暴跌风险扫描中...</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    el.innerHTML = dumpRiskResults.map(c => {
+      const riskColor = c.riskLevel === 'high' ? 'var(--red)' : 'var(--yellow)';
+      const riskTag = `<span style="color:${riskColor};margin-left:3px;font-size:9px;font-weight:700;">⚠${c.riskScore}分</span>`;
+      const chg = c.change24h;
+      const chgColor = chg >= 0 ? 'var(--green)' : 'var(--red)';
+      const chgTag = `<span style="color:${chgColor};margin-left:3px;font-size:9px;">${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>`;
+      const topRisks = c.risks.slice(0, 2).map(r => r.tag).join(' ');
+      return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" style="border-color:${riskColor};" onclick="selectDumpCoin('${c.symbol}')" title="${c.riskEmoji} 风险分 ${c.riskScore}&#10;${c.risks.map(r => r.level + r.tag + '(' + r.detail + ')').join('&#10;')}">` +
+        `${c.label}${riskTag}${chgTag}<span style="color:var(--text2);margin-left:3px;font-size:8px;">${topRisks}</span></span>`;
+    }).join('');
+    if (dumpRiskResults.length > 20) {
+      wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+      btn.style.display = '';
+      btn.textContent = coinListExpanded ? '收起' : `展开全部 (${dumpRiskResults.length})`;
+    } else {
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+    }
+    return;
+  }
+
   if (activeFilter === 'gainer') {
     if (gainerError && !gainerLoading) {
       el.innerHTML = `<span style="font-size:12px;color:var(--red);">${escAttr(gainerError)}</span>`;
@@ -2369,7 +2400,7 @@ function renderCoinTabs() {
 }
 
 function selectRightCoin(sym) {
-  if ((activeFilter === 'rec_long' || activeFilter === 'rec_short' || activeFilter === 'right_side' || activeFilter === 'right_stable' || activeFilter === 'left_side' || activeFilter === 'smart_signal') && filterTF !== currentTF) {
+  if ((activeFilter === 'rec_long' || activeFilter === 'rec_short' || activeFilter === 'right_side' || activeFilter === 'right_stable' || activeFilter === 'left_side' || activeFilter === 'smart_signal' || activeFilter === 'dump_risk') && filterTF !== currentTF) {
     currentTF = filterTF;
     renderTFTabs();
   }
@@ -2547,6 +2578,7 @@ function removeCoin(sym) {
 const FILTER_DEFS = [
   { id: 'all', label: '全部' },
   { id: 'gainer', label: '涨幅榜·8点' },
+  { id: 'dump_risk', label: '暴跌预警' },
   { id: 'right_side', label: '右侧交易' },
   { id: 'right_stable', label: '右侧稳趋势' },
   { id: 'left_side', label: '左侧交易' },
@@ -2582,6 +2614,12 @@ function renderFilterTabs() {
       } else if (gainerLastScan > 0) {
         const ago = Math.round((Date.now() - gainerLastScan) / 1000);
         extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${ago < 60 ? ago + 's前' : Math.round(ago / 60) + 'm前'}</span>`;
+      }
+    }
+    if (f.id === 'dump_risk') {
+      if (dumpRiskResults.length > 0) badge = `<span class="badge" style="background:var(--red);">${dumpRiskResults.length}</span>`;
+      if (dumpRiskLoading && activeFilter === 'dump_risk') {
+        extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">扫描中</span>`;
       }
     }
     if (f.id === 'right_side') {
@@ -2620,7 +2658,7 @@ function renderFilterTabs() {
         extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
       }
     }
-    const loading = (f.id === 'gainer' && gainerLoading) || (f.id === 'right_side' && rightSideLoading) || (f.id === 'right_stable' && rightStableLoading) || (f.id === 'rec_long' && recLongLoading) || (f.id === 'rec_short' && recShortLoading) || (f.id === 'smart_signal' && smartSignalLoading) ? ' loading' : '';
+    const loading = (f.id === 'gainer' && gainerLoading) || (f.id === 'dump_risk' && dumpRiskLoading) || (f.id === 'right_side' && rightSideLoading) || (f.id === 'right_stable' && rightStableLoading) || (f.id === 'rec_long' && recLongLoading) || (f.id === 'rec_short' && recShortLoading) || (f.id === 'smart_signal' && smartSignalLoading) ? ' loading' : '';
     return `<span class="filter-tab${isActive ? ' active' : ''}${loading}" onclick="switchFilter('${f.id}')">${f.label}${extra}${badge}</span>`;
   }).join('');
 
@@ -2642,6 +2680,9 @@ function renderFilterTabs() {
   const gainerRefreshBtn = activeFilter === 'gainer'
     ? `<span class="filter-pill" onclick="scanGainerCoins()" title="立即刷新">↻ 刷新</span>${gainerBaselineLabel ? `<span style="font-size:10px;color:var(--text2);margin-left:6px;">基准 ${gainerBaselineLabel}</span>` : ''}`
     : '';
+  const dumpRiskRefreshBtn = activeFilter === 'dump_risk'
+    ? `<span class="filter-pill" onclick="scanDumpRiskCoins()" title="立即刷新">↻ 刷新</span><span style="font-size:10px;color:var(--text2);margin-left:6px;">风险≥3 · 远离高危币</span>`
+    : '';
   const smartSignalRefreshBtn = activeFilter === 'smart_signal'
     ? `<span class="filter-pill" onclick="scanSmartSignalCoins()" title="立即刷新">↻ 刷新</span><span style="font-size:10px;color:var(--text2);margin-left:6px;">净多[B] · 限流保护</span>`
     : '';
@@ -2657,7 +2698,7 @@ function renderFilterTabs() {
     <div class="filter-tabs">${tabs}</div>
     ${tfGroup}
     <span class="filter-sep"></span>
-    <div class="filter-group"><span class="filter-group-label">${activeFilter === 'gainer' ? 'Top' : '范围'}</span>${rangeBtns}${gainerRefreshBtn}${smartSignalRefreshBtn}</div>
+    <div class="filter-group"><span class="filter-group-label">${activeFilter === 'gainer' ? 'Top' : '范围'}</span>${rangeBtns}${gainerRefreshBtn}${dumpRiskRefreshBtn}${smartSignalRefreshBtn}</div>
     ${stableOpts}
     <span class="filter-sep"></span>
     <div class="filter-group"><span class="filter-group-label">排序</span>${sortBtns}</div>
@@ -2674,6 +2715,9 @@ function switchFilter(filterId) {
   renderFilterTabs();
   if (filterId === 'gainer' && !gainerLoading) {
     scanGainerCoins();
+  }
+  if (filterId === 'dump_risk' && dumpRiskResults.length === 0 && !dumpRiskLoading) {
+    scanDumpRiskCoins();
   }
   if (filterId === 'right_side' && rightSideCoins.size === 0 && !rightSideLoading) {
     scanRightSideCoins();
@@ -2709,6 +2753,7 @@ function clearAllScanCache() {
   gainerResults = [];
   rightStableResults = [];
   rightStableCache = {};
+  dumpRiskResults = [];
 }
 
 function switchMaxDrawdown(v) {
@@ -3056,6 +3101,8 @@ let leftSideResults = [];
 let leftSideCache = {};
 let smartSignalResults = [];
 let smartSignalLoading = false;
+let dumpRiskResults = [];
+let dumpRiskLoading = false;
 
 async function pMap(items, fn, concurrency = 5) {
   const results = [];
@@ -3462,6 +3509,29 @@ async function checkCoinDirection(sym) {
 
     return { buyScore, sellScore, buyReasons, sellReasons, detail: buyReasons.join(',') + ' | ' + sellReasons.join(',') };
   } catch { return { buyScore: 0, sellScore: 0, buyReasons: [], sellReasons: [] }; }
+}
+
+async function scanDumpRiskCoins() {
+  dumpRiskLoading = true;
+  dumpRiskResults = [];
+  renderFilterTabs();
+  renderCoinTabs();
+
+  try {
+    const res = await fetch(`/api/scan-dump?limit=${scanTopLimit}&minRisk=3`);
+    const data = await res.json();
+    if (Array.isArray(data)) {
+      dumpRiskResults = data;
+    }
+  } catch {}
+
+  dumpRiskLoading = false;
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+function selectDumpCoin(sym) {
+  changeSymbol(sym);
 }
 
 async function scanSmartSignalCoins() {
