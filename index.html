@@ -162,6 +162,8 @@
   .status { font-size: 13px; color: var(--text2); }
   .status .dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 4px; }
   .status .live { background: var(--green); animation: pulse 2s infinite; }
+  .status .error { background: var(--red); animation: none; }
+  .status-error { color: var(--red); font-size: 12px; max-width: 480px; line-height: 1.4; }
   @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
 
   .overview { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
@@ -452,7 +454,8 @@
       <option value="120">2min</option>
       <option value="300">5min</option>
     </select>
-    <span class="status"><span class="dot live"></span><span id="countdown"></span></span>
+    <span class="status"><span class="dot live" id="statusDot"></span><span id="countdown"></span></span>
+    <span class="status-error" id="statusError" hidden></span>
     <button id="triggerPushBtn" onclick="triggerStablePush()" style="padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;border:1px solid var(--green);color:var(--green);background:transparent;white-space:nowrap;">推送稳趋势</button>
   </div>
 </div>
@@ -2061,6 +2064,22 @@ function renderCharts(data) {
   });
 }
 
+function setDataStatus(ok, message = '') {
+  const dot = document.getElementById('statusDot');
+  const err = document.getElementById('statusError');
+  if (!dot || !err) return;
+  dot.classList.toggle('live', ok);
+  dot.classList.toggle('error', !ok);
+  if (ok) {
+    err.hidden = !message;
+    err.textContent = message;
+    err.style.color = '';
+  } else {
+    err.hidden = false;
+    err.textContent = message || '数据加载失败';
+  }
+}
+
 async function fetchData() {
   try {
     const rangeOpt = CHART_RANGE_OPTIONS.find(r => r.value === chartRange) || CHART_RANGE_OPTIONS[2];
@@ -2068,6 +2087,16 @@ async function fetchData() {
     const data = await res.json();
     if (data.error) throw new Error(data.error);
     window._lastSmartData = data;
+    if (data.warnings?.length) {
+      setDataStatus(true);
+      const err = document.getElementById('statusError');
+      err.hidden = false;
+      err.style.color = 'var(--yellow)';
+      err.textContent = `部分指标加载失败（${data.warnings.length}项），图表可能不完整`;
+    } else {
+      setDataStatus(true);
+      document.getElementById('statusError').style.color = '';
+    }
     document.getElementById('title').textContent = `${symbol} 聪明钱监控面板`;
     renderOverview(data);
     renderSignals(data);
@@ -2077,6 +2106,7 @@ async function fetchData() {
     fetchAndDrawKlines();
   } catch (e) {
     console.error('Fetch error:', e);
+    setDataStatus(false, e.message);
   }
 }
 

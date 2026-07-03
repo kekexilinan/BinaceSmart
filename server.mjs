@@ -1,6 +1,8 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { scanRightStable } from './scan-stable.mjs';
@@ -9,13 +11,16 @@ import { setupProxyFromEnv } from './proxy-setup.mjs';
 import { checkDumpRisk, scanDumpCoins, formatDumpPushContent } from './scan-dump-risk.mjs';
 import { scanShortSignals } from './scan-short-signal.mjs';
 
+const execFileAsync = promisify(execFile);
+const FETCH_TIMEOUT_MS = 15000;
+
 // Load .env file
 const __dirname = dirname(fileURLToPath(import.meta.url));
 try {
   const envContent = await readFile(join(__dirname, '.env'), 'utf8');
-  for (const line of envContent.split('\n')) {
-    const match = line.match(/^(\w+)=(.+)$/);
-    if (match && !process.env[match[1]]) process.env[match[1]] = match[2].trim();
+  for (const line of envContent.split(/\r?\n/)) {
+    const match = line.trim().match(/^(\w+)=(.*)$/);
+    if (match && match[2] && !process.env[match[1]]) process.env[match[1]] = match[2].trim();
   }
 } catch {}
 
@@ -31,10 +36,40 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-async function proxyBinance(path) {
-  const res = await fetch(`${FAPI_BASE}${path}`);
-  if (!res.ok) throw new Error(`Binance API ${res.status}: ${path}`);
-  return res.json();
+async function fetchJsonViaCurl(url) {
+  const args = ['-s', '--max-time', '15'];
+  if (process.env.HTTPS_PROXY) args.push('--proxy', process.env.HTTPS_PROXY);
+  args.push(url);
+  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024 });
+  return JSON.parse(stdout.trim());
+}
+
+async function proxyBinance(path, { retries = 3 } = {}) {
+  const url = `${FAPI_BASE}${path}`;
+  let lastErr;
+  for (let attempt = 1; attempt <= retries; attempt++) {
+    try {
+      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+      if (res.ok) return res.json();
+      const body = await res.text();
+      if (res.status === 451) {
+        throw new Error('币安 API 地区限制 (451)，请确认代理节点可访问合约 API');
+      }
+      throw new Error(`Binance API ${res.status}: ${body.slice(0, 120) || path}`);
+    } catch (e) {
+      lastErr = e;
+      try {
+        return await fetchJsonViaCurl(url);
+      } catch (curlErr) {
+        lastErr = curlErr;
+        if (attempt < retries) {
+          await new Promise(r => setTimeout(r, 800 * attempt));
+          continue;
+        }
+      }
+    }
+  }
+  throw lastErr;
 }
 
 async function waitForNetworkReady(label = '币安 API', {
@@ -173,21 +208,32 @@ async function handleAPI(symbol, { ratioLimit = 72, oiLimit = 42, takerLimit = 4
   const rl = Math.min(500, Math.max(1, parseInt(ratioLimit, 10)));
   const ol = Math.min(500, Math.max(1, parseInt(oiLimit, 10)));
   const tl = Math.min(500, Math.max(1, parseInt(takerLimit, 10)));
-  const [price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate, fundingRateHist] =
-    await Promise.all([
-      proxyBinance(`/fapi/v2/ticker/price?symbol=${symbol}`),
-      proxyBinance(`/fapi/v1/ticker/24hr?symbol=${symbol}`),
-      proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
-      proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=${rl}`),
-      proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
-      proxyBinance(`/fapi/v1/openInterest?symbol=${symbol}`),
-      proxyBinance(`/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=${ol}`),
-      proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=${tl}`),
-      proxyBinance(`/fapi/v1/premiumIndex?symbol=${symbol}`),
-      proxyBinance(`/fapi/v1/fundingRate?symbol=${symbol}&limit=100`),
-    ]);
-  const changeSince8am = await getChangeSince8am(symbol, price.price);
-  return { price, ticker24h, topAccounts, topPositions, globalRatio, oi, oiHist, takerVol, fundingRate, fundingRateHist, changeSince8am };
+  const keys = ['price', 'ticker24h', 'topAccounts', 'topPositions', 'globalRatio', 'oi', 'oiHist', 'takerVol', 'fundingRate', 'fundingRateHist'];
+  const tasks = [
+    proxyBinance(`/fapi/v2/ticker/price?symbol=${symbol}`),
+    proxyBinance(`/fapi/v1/ticker/24hr?symbol=${symbol}`),
+    proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
+    proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${symbol}&period=1h&limit=${rl}`),
+    proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${symbol}&period=1h&limit=${rl}`),
+    proxyBinance(`/fapi/v1/openInterest?symbol=${symbol}`),
+    proxyBinance(`/futures/data/openInterestHist?symbol=${symbol}&period=4h&limit=${ol}`),
+    proxyBinance(`/futures/data/takerlongshortRatio?symbol=${symbol}&period=5m&limit=${tl}`),
+    proxyBinance(`/fapi/v1/premiumIndex?symbol=${symbol}`),
+    proxyBinance(`/fapi/v1/fundingRate?symbol=${symbol}&limit=100`),
+  ];
+  const settled = await Promise.allSettled(tasks);
+  const data = {};
+  const errors = [];
+  settled.forEach((r, i) => {
+    if (r.status === 'fulfilled') data[keys[i]] = r.value;
+    else errors.push(`${keys[i]}: ${r.reason?.message || r.reason}`);
+  });
+  if (!data.price) {
+    throw new Error(errors[0] || '无法获取价格数据，请检查代理或稍后重试');
+  }
+  const changeSince8am = await getChangeSince8am(symbol, data.price.price).catch(() => null);
+  if (errors.length) data.warnings = errors;
+  return { ...data, changeSince8am };
 }
 
 let FEISHU_WEBHOOK = process.env.FEISHU_WEBHOOK || '';
@@ -322,7 +368,7 @@ async function runStableTrendPush() {
       row_height: 'low',
       freeze_first_column: true,
       columns: [
-        { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+        { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
         { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
         { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
         { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
@@ -549,7 +595,7 @@ async function runCombinedPush() {
         row_height: 'low',
         freeze_first_column: true,
         columns: [
-          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
           { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
           { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
           { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
@@ -595,7 +641,7 @@ async function runCombinedPush() {
         row_height: 'low',
         freeze_first_column: true,
         columns: [
-          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
           { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
           { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
           { name: 'dd', display_name: '峰值跌', data_type: 'lark_md', width: 'auto' },
@@ -631,7 +677,7 @@ async function runCombinedPush() {
         row_height: 'low',
         freeze_first_column: true,
         columns: [
-          { name: 'coin', display_name: '币种', data_type: 'text', width: 'auto' },
+          { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
           { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
           { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
           { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
