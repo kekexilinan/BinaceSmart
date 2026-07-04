@@ -1948,9 +1948,31 @@ function switchTF(tf) {
   fetchAndDrawKlines();
 }
 
-function renderCharts(data) {
+function chartRangeToHours() {
+  return ({ '12h': 12, '1d': 24, '3d': 72, '7d': 168 })[chartRange] || 72;
+}
+
+async function renderCharts(data) {
+  let whaleHist = { points: [], totalPoints: 0, collectorIntervalMin: 5 };
+  try {
+    const res = await fetch(`/api/whale-history?symbol=${symbol}&hours=${chartRangeToHours()}`);
+    whaleHist = await res.json();
+    if (whaleHist.error) whaleHist = { points: [], totalPoints: 0 };
+  } catch {}
+
+  const whalePoints = whaleHist.points || [];
+  const whaleMeta = whalePoints.length > 0
+    ? `${whalePoints.length} 个采样点 · 每 ${whaleHist.collectorIntervalMin || 5} 分钟采集 · 累计 ${whaleHist.totalPoints || whalePoints.length} 点`
+    : '暂无历史 · 服务每 5 分钟自动采集 Smart Signal 鲸鱼数据';
+
   const chartsEl = document.getElementById('charts');
   chartsEl.innerHTML = `
+    <div class="chart-card" style="grid-column: 1 / -1;">
+      <h3>鲸鱼 Smart Signal 多空趋势 <span style="font-size:11px;font-weight:400;color:var(--text2);">${whaleMeta}</span></h3>
+      ${whalePoints.length >= 2
+        ? '<canvas id="c-whale-trend" class="chart-tall"></canvas>'
+        : '<div id="c-whale-trend-empty" style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px;">数据采集中，请保持服务运行一段时间后查看折线图（切换币种后会自动加入采集列表）</div>'}
+    </div>
     <div class="chart-card">
       <h3>大户持仓多空比 (Top 20% 持仓维度) - 核心指标</h3>
       <canvas id="c-top-pos"></canvas>
@@ -2003,6 +2025,18 @@ function renderCharts(data) {
   `;
 
   requestAnimationFrame(() => {
+    if (whalePoints.length >= 2) {
+      const labels = whalePoints.map(p => ts2time(p.ts));
+      drawLineChart(
+        document.getElementById('c-whale-trend'),
+        labels,
+        [
+          { label: '鲸鱼仓位多空比', data: whalePoints.map(p => Math.min(p.whaleRatio, 8)) },
+          { label: '聪明钱净多空比', data: whalePoints.map(p => p.longShortRatio) },
+        ]
+      );
+    }
+
     // Top positions chart
     drawLineChart(
       document.getElementById('c-top-pos'),
@@ -2101,7 +2135,7 @@ async function fetchData() {
     renderOverview(data);
     renderSignals(data);
     renderSmartSignalPanel();
-    renderCharts(data);
+    await renderCharts(data);
     checkAlerts(data);
     fetchAndDrawKlines();
   } catch (e) {

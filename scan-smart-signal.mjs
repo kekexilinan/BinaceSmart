@@ -1,6 +1,11 @@
 import { setupProxyFromEnv } from './proxy-setup.mjs';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 
 setupProxyFromEnv();
+
+const execFileAsync = promisify(execFile);
+const FETCH_TIMEOUT_MS = 15000;
 
 const BAPI_SMART_SIGNAL =
   'https://www.binance.com/bapi/futures/v1/public/future/smart-money/signal/overview';
@@ -18,6 +23,35 @@ function sleep(ms) {
   return new Promise(r => setTimeout(r, ms));
 }
 
+async function fetchJsonViaCurl(url) {
+  const args = ['-s', '--max-time', '15'];
+  const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
+  if (proxy) args.push('--proxy', proxy);
+  args.push(url);
+  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024 });
+  return JSON.parse(stdout.trim());
+}
+
+async function fetchSmartSignalJson(url) {
+  const headers = {
+    Accept: 'application/json',
+    'User-Agent': 'Mozilla/5.0 (compatible; BinaceSmart/1.0)',
+  };
+  try {
+    const res = await fetch(url, { headers, signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
+    if (res.status === 418 || res.status === 429 || res.status === 403) {
+      const retryAfter = parseInt(res.headers.get('retry-after') || '3600', 10);
+      circuitOpenUntil = Date.now() + retryAfter * 1000;
+      throw new Error(`Smart Signal API ${res.status}，已熔断 ${retryAfter}s`);
+    }
+    if (!res.ok) throw new Error(`Smart Signal API ${res.status}`);
+    return res.json();
+  } catch (e) {
+    if (String(e.message || e).includes('熔断')) throw e;
+    return fetchJsonViaCurl(url);
+  }
+}
+
 async function throttleFetch(url) {
   if (Date.now() < circuitOpenUntil) {
     throw new Error(`Smart Signal 限流熔断中，请 ${Math.ceil((circuitOpenUntil - Date.now()) / 60000)} 分钟后重试`);
@@ -28,21 +62,7 @@ async function throttleFetch(url) {
     if (wait > 0) await sleep(wait);
     lastRequestAt = Date.now();
 
-    const res = await fetch(url, {
-      headers: {
-        'Accept': 'application/json',
-        'User-Agent': 'Mozilla/5.0 (compatible; BinaceSmart/1.0)',
-      },
-    });
-
-    if (res.status === 418 || res.status === 429 || res.status === 403) {
-      const retryAfter = parseInt(res.headers.get('retry-after') || '3600', 10);
-      circuitOpenUntil = Date.now() + retryAfter * 1000;
-      throw new Error(`Smart Signal API ${res.status}，已熔断 ${retryAfter}s`);
-    }
-    if (!res.ok) throw new Error(`Smart Signal API ${res.status}`);
-
-    const json = await res.json();
+    const json = await fetchSmartSignalJson(url);
     if (!json.success || !json.data) throw new Error(json.message || 'Smart Signal 数据无效');
     return json.data;
   };

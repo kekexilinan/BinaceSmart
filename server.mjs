@@ -10,6 +10,7 @@ import { fetchSmartSignal, analyzeSmartSignal, scanSmartSignal } from './scan-sm
 import { setupProxyFromEnv } from './proxy-setup.mjs';
 import { checkDumpRisk, scanDumpCoins, formatDumpPushContent } from './scan-dump-risk.mjs';
 import { scanShortSignals } from './scan-short-signal.mjs';
+import { recordWhaleSnapshot, getWhaleHistory, registerActiveSymbol, startWhaleCollector } from './whale-history.mjs';
 
 const execFileAsync = promisify(execFile);
 const FETCH_TIMEOUT_MS = 15000;
@@ -868,6 +869,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/data') {
     const symbol = url.searchParams.get('symbol') || 'SLXUSDT';
+    registerActiveSymbol(symbol);
     const ratioLimit = url.searchParams.get('ratioLimit') || 72;
     const oiLimit = url.searchParams.get('oiLimit') || 42;
     const takerLimit = url.searchParams.get('takerLimit') || 48;
@@ -889,8 +891,24 @@ const server = createServer(async (req, res) => {
     try {
       const raw = await fetchSmartSignal(symbol);
       const analysis = analyzeSmartSignal(raw, price);
+      recordWhaleSnapshot(symbol, raw, price).catch(() => {});
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ symbol, raw, ...analysis }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/whale-history') {
+    const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
+    const hours = url.searchParams.get('hours') || '72';
+    registerActiveSymbol(symbol);
+    try {
+      const data = await getWhaleHistory(symbol, hours);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ error: e.message }));
@@ -1001,4 +1019,7 @@ server.listen(PORT, () => {
     });
   startStablePushScheduler();
   startCombinedPushScheduler();
+  startWhaleCollector().catch(e => {
+    console.warn(`  ⚠ 鲸鱼历史采集启动失败: ${e.message}`);
+  });
 });
