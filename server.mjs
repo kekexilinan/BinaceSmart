@@ -29,6 +29,10 @@ const proxyInfo = setupProxyFromEnv();
 
 const PORT = parseInt(process.env.PORT || '3388', 10);
 const FAPI_BASE = 'https://fapi.binance.com';
+const CMC_API_KEY = process.env.CMC_API_KEY || '';
+const CMC_BASE = 'https://pro-api.coinmarketcap.com';
+
+const mcCache = { data: new Map(), ts: 0, TTL: 5 * 60 * 1000 };
 
 const MIME = {
   '.html': 'text/html; charset=utf-8',
@@ -464,18 +468,129 @@ function fmtMarketCap(mc) {
   return `${mc.toFixed(0)}`;
 }
 
+async function refreshMcCacheCMC() {
+  if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
+  const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/listings/latest?limit=500&convert=USD`, {
+    headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+  });
+  if (!r.ok) throw new Error(`CMC listings ${r.status}`);
+  const json = await r.json();
+  const m = new Map();
+  for (const c of json.data || []) {
+    m.set(c.symbol.toUpperCase(), c.quote?.USD?.market_cap || 0);
+  }
+  mcCache.data = m;
+  mcCache.ts = Date.now();
+  console.log(`[CMC] 缓存已刷新, ${m.size} 个币种`);
+}
+
+async function refreshMcCacheGecko() {
+  if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
+  const m = new Map();
+  for (let page = 1; page <= 3; page++) {
+    const r = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false`);
+    if (!r.ok) break;
+    const data = await r.json();
+    if (!data.length) break;
+    for (const c of data) {
+      if (c.market_cap > 0) m.set(c.symbol.toUpperCase(), c.market_cap);
+    }
+  }
+  if (m.size > 0) {
+    mcCache.data = m;
+    mcCache.ts = Date.now();
+    console.log(`[CoinGecko] 缓存已刷新, ${m.size} 个币种`);
+  }
+}
+
+async function refreshMcCache() {
+  if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
+  if (CMC_API_KEY) {
+    try { await refreshMcCacheCMC(); return; } catch (e) { console.warn(`[CMC] 刷新失败, 回退 CoinGecko: ${e.message}`); }
+  }
+  try { await refreshMcCacheGecko(); } catch (e) { console.warn(`[CoinGecko] 刷新失败: ${e.message}`); }
+}
+
+function normSymbol(sym) {
+  return sym.replace('USDT', '').replace(/^1000/, '').toUpperCase();
+}
+
+async function fetchMcForSymbolGecko(sym) {
+  const lower = sym.replace('USDT', '').replace(/^1000/, '').toLowerCase();
+  try {
+    const sr = await fetch(`https://api.coingecko.com/api/v3/search?query=${lower}`);
+    if (!sr.ok) return 0;
+    const sd = await sr.json();
+    const coin = sd.coins?.find(c => c.symbol?.toLowerCase() === lower) || sd.coins?.[0];
+    if (!coin) return 0;
+    const pr = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=usd&include_market_cap=true`);
+    if (!pr.ok) return 0;
+    const pd = await pr.json();
+    return pd[coin.id]?.usd_market_cap || 0;
+  } catch { return 0; }
+}
+
+async function fetchMcForSymbol(sym) {
+  const upper = normSymbol(sym);
+  await refreshMcCache();
+  if (mcCache.data.has(upper)) return mcCache.data.get(upper);
+  if (CMC_API_KEY) {
+    try {
+      const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${upper}&convert=USD`, {
+        headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+      });
+      if (r.ok) {
+        const json = await r.json();
+        const entry = Object.values(json.data || {})[0];
+        const arr = Array.isArray(entry) ? entry : [entry];
+        const mc = arr[0]?.quote?.USD?.market_cap || 0;
+        if (mc > 0) { mcCache.data.set(upper, mc); return mc; }
+      }
+    } catch {}
+  }
+  const mc = await fetchMcForSymbolGecko(sym);
+  if (mc > 0) mcCache.data.set(upper, mc);
+  return mc;
+}
+
 async function batchFetchMarketCaps(symbols) {
   const result = {};
-  const syms = [...new Set(symbols.map(s => s.replace('USDT', '').toLowerCase()))];
-  try {
-    const searchRes = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=1&sparkline=false`);
-    if (!searchRes.ok) return result;
-    const data = await searchRes.json();
-    const lookup = new Map(data.map(c => [c.symbol.toLowerCase(), c.market_cap || 0]));
-    for (const s of syms) {
-      result[s.toUpperCase() + 'USDT'] = lookup.get(s) || 0;
+  await refreshMcCache();
+  const missing = [];
+  for (const s of symbols) {
+    const upper = normSymbol(s);
+    const cached = mcCache.data.get(upper);
+    if (cached && cached > 0) {
+      result[s] = cached;
+    } else {
+      missing.push(s);
     }
-  } catch {}
+  }
+  if (missing.length > 0 && CMC_API_KEY) {
+    const slugs = [...new Set(missing.map(s => normSymbol(s)))];
+    const chunks = [];
+    for (let i = 0; i < slugs.length; i += 100) chunks.push(slugs.slice(i, i + 100));
+    for (const chunk of chunks) {
+      try {
+        const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${chunk.join(',')}&convert=USD`, {
+          headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+        });
+        if (!r.ok) continue;
+        const json = await r.json();
+        for (const [, v] of Object.entries(json.data || {})) {
+          const arr = Array.isArray(v) ? v : [v];
+          for (const coin of arr) {
+            const mc = coin?.quote?.USD?.market_cap || 0;
+            if (mc > 0) mcCache.data.set(coin.symbol.toUpperCase(), mc);
+          }
+        }
+      } catch (e) { console.warn(`[CMC] batch 查询失败: ${e.message}`); }
+    }
+  }
+  for (const s of missing) {
+    const upper = normSymbol(s);
+    result[s] = mcCache.data.get(upper) || 0;
+  }
   return result;
 }
 
@@ -831,20 +946,12 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/marketcap') {
-    const sym = (url.searchParams.get('symbol') || 'BTCUSDT').replace('USDT', '').toLowerCase();
+    const symbol = url.searchParams.get('symbol') || 'BTCUSDT';
     const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
     try {
-      const searchRes = await fetch(`https://api.coingecko.com/api/v3/search?query=${sym}`);
-      if (!searchRes.ok) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
-      const searchData = await searchRes.json();
-      const coin = searchData.coins?.find(c => c.symbol?.toLowerCase() === sym) || searchData.coins?.[0];
-      if (!coin) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
-      const priceRes = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=usd&include_market_cap=true`);
-      if (!priceRes.ok) { res.writeHead(200, headers); res.end(JSON.stringify({ market_cap: 0 })); return; }
-      const priceData = await priceRes.json();
-      const entry = priceData[coin.id];
+      const mc = await fetchMcForSymbol(symbol);
       res.writeHead(200, headers);
-      res.end(JSON.stringify({ market_cap: entry?.usd_market_cap || 0 }));
+      res.end(JSON.stringify({ market_cap: mc }));
     } catch (e) {
       res.writeHead(200, headers);
       res.end(JSON.stringify({ market_cap: 0 }));
