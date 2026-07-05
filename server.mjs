@@ -19,6 +19,9 @@ import {
   scanPumpSmartAlerts, buildPumpSmartAlertElements, buildPumpGainerAlertElements,
   PUMP_SMART_MIN_CHANGE, PUMP_SMART_INTERVAL_MIN, PUMP_SMART_SCAN_LIMIT, REALTIME_ALERT_INTERVAL_MIN,
 } from './pump-smart-alert.mjs';
+import { evaluatePositionHealth, evaluatePositionsBatch } from './position-health.mjs';
+import { getUserPositions, addUserPosition, deleteUserPosition } from './user-positions.mjs';
+import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
 
 const FETCH_TIMEOUT_MS = 15000;
 
@@ -322,25 +325,33 @@ const STABLE_PUSH_HOURS = parseFloat(process.env.STABLE_PUSH_HOURS || '4', 10);
 const STABLE_PUSH_ENABLED = process.env.STABLE_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const STABLE_SCAN_LIMIT = parseInt(process.env.STABLE_SCAN_LIMIT || '200', 10);
 const STABLE_MAX_DRAWDOWN = parseFloat(process.env.STABLE_MAX_DRAWDOWN || '0.30', 10);
-const DUMP_PUSH_HOURS = parseFloat(process.env.DUMP_PUSH_HOURS || '1');
+const DUMP_PUSH_HOURS = parseFloat(process.env.DUMP_PUSH_HOURS || process.env.COMBINED_PUSH_HOURS || '4', 10);
 const DUMP_PUSH_ENABLED = process.env.DUMP_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const DUMP_SCAN_LIMIT = parseInt(process.env.DUMP_SCAN_LIMIT || '200', 10);
 const DUMP_MIN_RISK = parseInt(process.env.DUMP_MIN_RISK || '4', 10);
 const LONG_PUSH_HOURS = parseFloat(process.env.LONG_PUSH_HOURS || process.env.COMBINED_PUSH_HOURS || '4', 10);
 const COMBINED_PUSH_HOURS = parseFloat(process.env.COMBINED_PUSH_HOURS || process.env.STABLE_PUSH_HOURS || '4', 10);
-const DUMP_ALERT_INTERVAL_MIN = parseInt(process.env.DUMP_ALERT_INTERVAL_MIN || '15', 10);
 const LONG_PUSH_ENABLED = process.env.LONG_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const LONG_SCAN_LIMIT = parseInt(process.env.LONG_SCAN_LIMIT || '200', 10);
 const LONG_MIN_SCORE = parseInt(process.env.LONG_MIN_SCORE || '3', 10);
 const PUMP_SMART_ENABLED = process.env.PUMP_SMART_ALERT_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 
-const PUMP_GAINER_ENABLED = process.env.PUMP_GAINER_ALERT_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const PUMP_GAINER_ENABLED = process.env.PUMP_GAINER_ALERT_ENABLED === 'true' && !!FEISHU_WEBHOOK;
+
+const POSITION_HEALTH_ENABLED = process.env.POSITION_HEALTH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const POSITION_HEALTH_INTERVAL_MIN = parseInt(process.env.POSITION_HEALTH_INTERVAL_MIN || '15', 10);
+const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
+  (process.env.POSITION_HEALTH_WATCH_SYMBOLS || 'LABUSDT')
+    .split(/[,，\s]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean)
+    .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
+);
 
 let pumpSmartRunning = false;
 let dumpAlertRunning = false;
 let pumpGainerRunning = false;
-let realtimeAlertRunning = false;
-/** @type {Map<string, { since: number, count: number }>} */
+/** @type {Map<string, { since: number, count: number, lastScore: number, lastPushedAt: number }>} */
 const pumpSmartActive = new Map();
 const pumpGainerActive = new Map();
 const dumpAlertActive = new Map();
@@ -692,7 +703,7 @@ async function collectPredictionSnapshot() {
     const { gainMap, declineMap, gainerItems } = await build8amChangeMaps();
     const [longAll, shortAll, dumpAll, stableAll, momentumAll] = await Promise.all([
       filterItemsByMarketCap(await scanRightStable({
-        limit: LONG_SCAN_LIMIT, maxDrawdownPct: 0.20, dualTFConfirm: true, filterTF: '1h', concurrency: 3,
+        limit: LONG_SCAN_LIMIT, maxDrawdownPct: 0.20, dualTFConfirm: true, filterTF: '1h', concurrency: 3, strictTrend: true,
       })).then(r => r.filter(x => x.score >= LONG_MIN_SCORE).slice(0, COMBINED_TOP_N)).catch(() => []),
       filterItemsByMarketCap(await scanShortSignals({
         limit: 100, minScore: 4, concurrency: 3, declineMap, gainMap,
@@ -770,8 +781,11 @@ async function runCombinedPush() {
         dualTFConfirm: true,
         filterTF: '1h',
         concurrency: 3,
+        strictTrend: true,
       });
-      const filtered = (await filterItemsByMarketCap(allResults)).filter(r => r.score >= LONG_MIN_SCORE);
+      const filtered = (await filterItemsByMarketCap(allResults))
+        .filter(r => r.score >= LONG_MIN_SCORE)
+        .filter(r => (r.change ?? 0) >= -3);
       const resultSymbols = filtered.map(r => r.symbol);
 
       const { prices: baselines } = await load8amBaselinePrices(resultSymbols);
@@ -780,8 +794,14 @@ async function runCombinedPush() {
         r.changeSince8am = base && base > 0 ? ((r.price - base) / base) * 100 : r.change;
       }
 
-      const symbolMap = new Map(filtered.map(r => [r.symbol, r]));
-      await pmap(resultSymbols, async (sym) => {
+      const longEligible = filtered.filter(r => (r.changeSince8am ?? 0) >= 0);
+      const dropped = filtered.length - longEligible.length;
+      if (dropped > 0) {
+        console.log(`  ⏭ 做多过滤: 剔除 ${dropped} 个8点以来下跌币种`);
+      }
+
+      const symbolMap = new Map(longEligible.map(r => [r.symbol, r]));
+      await pmap(longEligible.map(r => r.symbol), async (sym) => {
         const [topAccounts, globalRatio] = await Promise.all([
           proxyBinance(`/futures/data/topLongShortAccountRatio?symbol=${sym}&period=1h&limit=1`),
           proxyBinance(`/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=1h&limit=1`),
@@ -794,7 +814,7 @@ async function runCombinedPush() {
         }
       }, 10);
 
-      for (const r of filtered) {
+      for (const r of longEligible) {
         let count = 1;
         for (let i = longPushHistory.length - 1; i >= 0; i--) {
           if (longPushHistory[i].has(r.symbol)) count++;
@@ -802,11 +822,11 @@ async function runCombinedPush() {
         }
         r.streak = count;
       }
-      longPushHistory.push(new Set(resultSymbols));
+      longPushHistory.push(new Set(longEligible.map(r => r.symbol)));
       if (longPushHistory.length > 100) longPushHistory = longPushHistory.slice(-100);
 
-      filtered.sort((a, b) => b.streak - a.streak || b.score - a.score || b.changeSince8am - a.changeSince8am);
-      longResults = filtered.slice(0, COMBINED_TOP_N);
+      longEligible.sort((a, b) => b.score - a.score || b.changeSince8am - a.changeSince8am || b.streak - a.streak);
+      longResults = longEligible.slice(0, COMBINED_TOP_N);
 
       const momentum = await filterItemsByMarketCap(await scanMomentumLong({ candidates: gainerItems, minScore: 3, concurrency: 3 }));
       momentumResults = momentum;
@@ -980,7 +1000,7 @@ async function runDumpAlertPush() {
     const warnRisk = dumpResults.filter(r => r.riskLevel === 'warn');
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     const elements = [
-      { tag: 'markdown', content: `**⏰ ${now}**\n**实时暴跌预警** · 每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟 · 风险≥${DUMP_MIN_RISK}` },
+      { tag: 'markdown', content: `**⏰ ${now}**\n**暴跌预警** · 每 ${DUMP_PUSH_HOURS}h 整点 · 风险≥${DUMP_MIN_RISK}` },
       { tag: 'markdown', content: `**🚨 ${highRisk.length} 高危 · ⚠️ ${warnRisk.length} 警告**` },
       {
         tag: 'table',
@@ -1064,21 +1084,8 @@ async function runPumpGainerAlertPush() {
   }
 }
 
-async function runRealtimeAlerts() {
-  if (realtimeAlertRunning) return;
-  realtimeAlertRunning = true;
-  try {
-    await Promise.all([
-      PUMP_GAINER_ENABLED ? runPumpGainerAlertPush() : Promise.resolve(),
-      PUMP_SMART_ENABLED ? runPumpSmartAlertPush() : Promise.resolve(),
-      DUMP_PUSH_ENABLED ? runDumpAlertPush() : Promise.resolve(),
-    ]);
-  } finally {
-    realtimeAlertRunning = false;
-  }
-}
 
-async function runPumpSmartAlertPush() {
+async function runPumpSmartAlertPush({ force = false } = {}) {
   if (!PUMP_SMART_ENABLED || pumpSmartRunning) return;
   pumpSmartRunning = true;
   try {
@@ -1101,22 +1108,66 @@ async function runPumpSmartAlertPush() {
       return;
     }
 
+    const minIntervalMs = PUMP_SMART_INTERVAL_MIN * 60 * 1000;
     const pushCounts = {};
+    const toPush = [];
+
     for (const a of alerts) {
       const prev = pumpSmartActive.get(a.symbol);
-      const count = prev ? prev.count + 1 : 1;
-      pumpSmartActive.set(a.symbol, { since: prev?.since ?? Date.now(), count });
-      pushCounts[a.symbol] = count;
+      if (force) {
+        toPush.push(a);
+        pushCounts[a.symbol] = prev ? prev.count + 1 : 1;
+        pumpSmartActive.set(a.symbol, {
+          since: prev?.since ?? Date.now(),
+          count: pushCounts[a.symbol],
+          lastScore: a.smartScore,
+          lastPushedAt: Date.now(),
+        });
+        continue;
+      }
+
+      if (!prev) {
+        toPush.push(a);
+        pushCounts[a.symbol] = 1;
+        pumpSmartActive.set(a.symbol, {
+          since: Date.now(),
+          count: 1,
+          lastScore: a.smartScore,
+          lastPushedAt: Date.now(),
+        });
+        continue;
+      }
+
+      if (a.smartScore > prev.lastScore && Date.now() - prev.lastPushedAt >= minIntervalMs) {
+        toPush.push(a);
+        pushCounts[a.symbol] = prev.count + 1;
+        pumpSmartActive.set(a.symbol, {
+          since: prev.since,
+          count: pushCounts[a.symbol],
+          lastScore: a.smartScore,
+          lastPushedAt: Date.now(),
+        });
+      } else {
+        pumpSmartActive.set(a.symbol, {
+          ...prev,
+          lastScore: Math.max(prev.lastScore, a.smartScore),
+        });
+      }
     }
 
-    const elements = buildPumpSmartAlertElements(alerts, { fmtPrice, pushCounts });
-    const labels = alerts.slice(0, 3).map(a => a.label).join('/');
-    const title = alerts.length === 1
-      ? `🚀 暴涨+聪明钱加仓 · ${alerts[0].label}${pushCounts[alerts[0].symbol] > 1 ? ` (第${pushCounts[alerts[0].symbol]}次)` : ''}`
-      : `🚀 暴涨+聪明钱加仓 · ${labels}${alerts.length > 3 ? '…' : ''}`;
+    if (!toPush.length) {
+      console.log(`  ✓ 暴涨+聪明钱扫描: ${alerts.length} 个符合条件，无新增连续加仓`);
+      return;
+    }
+
+    const elements = buildPumpSmartAlertElements(toPush, { fmtPrice, pushCounts });
+    const labels = toPush.slice(0, 3).map(a => a.label).join('/');
+    const title = toPush.length === 1
+      ? `🚀 暴涨+聪明钱加仓 · ${toPush[0].label}${pushCounts[toPush[0].symbol] > 1 ? ` (第${pushCounts[toPush[0].symbol]}次)` : ''}`
+      : `🚀 暴涨+聪明钱加仓 · ${labels}${toPush.length > 3 ? '…' : ''}`;
 
     await sendFeishuCardV2(title, elements, 'orange');
-    console.log(`  ✓ 暴涨+聪明钱推送 (${alerts.length} 个: ${alerts.map(a => a.label).join(', ')})`);
+    console.log(`  ✓ 暴涨+聪明钱推送 (${toPush.length} 个: ${toPush.map(a => a.label).join(', ')})`);
   } catch (e) {
     console.warn(`  ⚠ 暴涨+聪明钱推送失败: ${e.message}`);
   } finally {
@@ -1124,20 +1175,44 @@ async function runPumpSmartAlertPush() {
   }
 }
 
-function startRealtimeAlertScheduler() {
-  const anyEnabled = PUMP_GAINER_ENABLED || PUMP_SMART_ENABLED || DUMP_PUSH_ENABLED;
-  if (!anyEnabled) {
-    console.log(`  ⏸ 暴涨/暴跌实时推送均未启用`);
+function startDumpPushScheduler() {
+  if (!DUMP_PUSH_ENABLED) {
+    console.log(`  ⏸ 暴跌推送未启用`);
     return;
   }
+  const slots = getStablePushHours(DUMP_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:00`).join(' / ');
+  console.log(`  🚨 暴跌预警推送: 上海时间 ${slots}（每 ${DUMP_PUSH_HOURS}h）→ 飞书`);
+
+  const scheduleNext = () => {
+    const next = getNextStablePushTime(new Date(), DUMP_PUSH_HOURS);
+    const delay = Math.max(0, next.getTime() - Date.now());
+    const label = next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    console.log(`  ⏭ 暴跌下次推送: ${label}（${Math.round(delay / 60000)} 分钟后）`);
+    setTimeout(async () => {
+      await runDumpAlertPush();
+      scheduleNext();
+    }, delay);
+  };
+  scheduleNext();
+}
+
+function startPumpSmartAlertScheduler() {
+  if (!PUMP_SMART_ENABLED) {
+    console.log(`  ⏸ 暴涨+聪明钱推送未启用`);
+    return;
+  }
+  const ms = PUMP_SMART_INTERVAL_MIN * 60 * 1000;
+  console.log(`  🚀 暴涨+聪明钱推送: 每 ${PUMP_SMART_INTERVAL_MIN} 分钟扫描 · 聪明钱连续加仓时提醒 → 飞书`);
+  setInterval(() => runPumpSmartAlertPush(), ms);
+  setTimeout(() => runPumpSmartAlertPush(), 90_000);
+}
+
+function startPumpGainerAlertScheduler() {
+  if (!PUMP_GAINER_ENABLED) return;
   const ms = REALTIME_ALERT_INTERVAL_MIN * 60 * 1000;
-  const parts = [];
-  if (PUMP_GAINER_ENABLED) parts.push('暴涨');
-  if (PUMP_SMART_ENABLED) parts.push('暴涨+聪明钱');
-  if (DUMP_PUSH_ENABLED) parts.push('暴跌');
-  console.log(`  ⚡ 实时推送: 每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟 · ${parts.join(' / ')} → 飞书`);
-  setInterval(() => runRealtimeAlerts(), ms);
-  setTimeout(() => runRealtimeAlerts(), 60_000);
+  console.log(`  🚀 暴涨提醒: 每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟 → 飞书`);
+  setInterval(() => runPumpGainerAlertPush(), ms);
+  setTimeout(() => runPumpGainerAlertPush(), 60_000);
 }
 
 function startCombinedPushScheduler() {
@@ -1309,6 +1384,104 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/position-health') {
+    const symbol = url.searchParams.get('symbol');
+    const direction = url.searchParams.get('direction') || 'long';
+    const entry = url.searchParams.get('entry');
+    const stopLoss = url.searchParams.get('stopLoss');
+    const takeProfit = url.searchParams.get('takeProfit');
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    try {
+      const data = await evaluatePositionHealth({
+        symbol,
+        direction,
+        entryPrice: entry,
+        stopLoss,
+        takeProfit,
+      });
+      res.writeHead(200, headers);
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/position-health/batch' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+      try {
+        const { positions } = JSON.parse(body || '{}');
+        if (!Array.isArray(positions)) throw new Error('positions 须为数组');
+        const data = await evaluatePositionsBatch(positions);
+        res.writeHead(200, headers);
+        res.end(JSON.stringify(data));
+      } catch (e) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/position-health/batch' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === '/api/user-positions' && req.method === 'GET') {
+    try {
+      const data = await getUserPositions();
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/user-positions' && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+      try {
+        const data = await addUserPosition(JSON.parse(body || '{}'));
+        res.writeHead(200, headers);
+        res.end(JSON.stringify(data));
+      } catch (e) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/user-positions' && req.method === 'DELETE') {
+    const id = url.searchParams.get('id');
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    try {
+      const data = await deleteUserPosition(id);
+      res.writeHead(200, headers);
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/user-positions' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET, POST, DELETE', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/marketcap') {
     const symbol = url.searchParams.get('symbol') || 'BTCUSDT';
     const headers = { 'Access-Control-Allow-Origin': '*', 'Content-Type': 'application/json' };
@@ -1455,7 +1628,7 @@ const server = createServer(async (req, res) => {
     }
     res.writeHead(200, headers);
     res.end(JSON.stringify({ ok: true, message: '已触发暴涨+聪明钱推送' }));
-    runPumpSmartAlertPush().catch(() => {});
+    runPumpSmartAlertPush({ force: true }).catch(() => {});
     return;
   }
 
@@ -1484,6 +1657,25 @@ const server = createServer(async (req, res) => {
   }
 
   if (url.pathname === '/api/trigger-combined-push' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-position-health-push' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (!FEISHU_WEBHOOK) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'FEISHU_WEBHOOK 未配置' }));
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发持仓健康推送' }));
+    runPositionHealthPush({ force: true }).catch(e => console.warn(`  ⚠ 持仓健康推送失败: ${e.message}`));
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-position-health-push' && req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
     res.end();
     return;
@@ -1572,9 +1764,19 @@ server.listen(PORT, () => {
 
   startStablePushScheduler();
   startCombinedPushScheduler();
-  startRealtimeAlertScheduler();
+  startDumpPushScheduler();
+  startPumpSmartAlertScheduler();
+  startPumpGainerAlertScheduler();
   startPredictionSnapshotScheduler();
   startStrategyReviewScheduler();
+  initPositionHealthMonitor({
+    enabled: POSITION_HEALTH_ENABLED,
+    feishuEnabled: !!FEISHU_WEBHOOK,
+    intervalMin: POSITION_HEALTH_INTERVAL_MIN,
+    watchSymbols: POSITION_HEALTH_WATCH_SYMBOLS,
+    sendFeishu,
+  });
+  startPositionHealthScheduler();
   startWhaleCollector().catch(e => {
     console.warn(`  ⚠ 鲸鱼历史采集启动失败: ${e.message}`);
   });

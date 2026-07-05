@@ -75,6 +75,24 @@ function isTrendIntact(closes, lows, ma20, ma5) {
   return { ok: false, reason: '趋势走坏' };
 }
 
+/** 做多推荐用：拒绝阴跌/破位，避免下跌中反复推多 */
+function isTrendIntactStrict(closes, lows, ma20, ma5) {
+  const n = closes.length - 1;
+  const lastClose = closes[n];
+  const lastMA20 = ma20[n];
+  const lastMA5 = ma5 ? ma5[n] : null;
+  if (lastMA20 == null || lastClose <= lastMA20) return { ok: false, reason: '价破MA20' };
+  if (lastMA5 != null && lastMA5 < lastMA20) return { ok: false, reason: 'MA5<MA20' };
+  if (n >= 3 && lastClose < closes[n - 3]) return { ok: false, reason: '近3K走弱' };
+  let downBars = 0;
+  for (let i = Math.max(1, n - 4); i <= n; i++) {
+    if (closes[i] < closes[i - 1]) downBars++;
+  }
+  if (downBars >= 4) return { ok: false, reason: '连续阴跌' };
+  if (Math.min(...lows.slice(-5)) < lastMA20 * 0.98) return { ok: false, reason: 'MA20失守' };
+  return { ok: true, reason: '上升趋势' };
+}
+
 function checkRightSideFromKlines(raw, filterTF) {
   if (!Array.isArray(raw) || raw.length < 30) {
     return { isRightSide: false, score: 0, detail: '数据不足' };
@@ -125,7 +143,7 @@ function checkRightSideFromKlines(raw, filterTF) {
   };
 }
 
-async function analyzeTfDrawdownTrend(symbol, interval, maxDD) {
+async function analyzeTfDrawdownTrend(symbol, interval, maxDD, { strictTrend = false } = {}) {
   const lookback = interval === '1d' ? 30 : interval === '4h' ? 36 : 48;
   const raw = await fetchJSON(`${FAPI_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${interval}&limit=100`);
   if (!Array.isArray(raw) || raw.length < 25) return null;
@@ -135,7 +153,8 @@ async function analyzeTfDrawdownTrend(symbol, interval, maxDD) {
   const ma20 = calcMA(closes, 20);
   const ma5 = calcMA(closes, 5);
   const dd = calcDrawdownFromPeak(highs, closes, lookback);
-  const trend = isTrendIntact(closes, lows, ma20, ma5);
+  const trendFn = strictTrend ? isTrendIntactStrict : isTrendIntact;
+  const trend = trendFn(closes, lows, ma20, ma5);
   return {
     interval,
     ddPct: dd * 100,
@@ -150,6 +169,7 @@ async function checkCoinRightStable(symbol, {
   filterTF = '1h',
   maxDrawdownPct = 0.30,
   dualTFConfirm = true,
+  strictTrend = false,
 } = {}) {
   const raw = await fetchJSON(`${FAPI_BASE}/fapi/v1/klines?symbol=${symbol}&interval=${filterTF}&limit=100`);
   const base = checkRightSideFromKlines(raw, filterTF);
@@ -158,7 +178,7 @@ async function checkCoinRightStable(symbol, {
   const tfs = dualTFConfirm ? ['1h', '1d'] : [filterTF];
   const tfResults = [];
   for (const tf of [...new Set(tfs)]) {
-    const r = await analyzeTfDrawdownTrend(symbol, tf, maxDrawdownPct);
+    const r = await analyzeTfDrawdownTrend(symbol, tf, maxDrawdownPct, { strictTrend });
     if (!r) return { ...base, isRightStable: false, symbol, detail: base.detail + ` ${tf}数据不足` };
     tfResults.push(r);
   }
@@ -189,12 +209,15 @@ async function pmap(items, fn, concurrency = 3) {
   return results;
 }
 
+export { checkCoinRightStable };
+
 export async function scanRightStable({
   limit = 200,
   maxDrawdownPct = 0.30,
   dualTFConfirm = true,
   filterTF = '1h',
   concurrency = 3,
+  strictTrend = false,
 } = {}) {
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
   const symbols = tickers
@@ -210,7 +233,7 @@ export async function scanRightStable({
 
   const results = [];
   await pmap(symbols, async (item) => {
-    const r = await checkCoinRightStable(item.symbol, { filterTF, maxDrawdownPct, dualTFConfirm });
+    const r = await checkCoinRightStable(item.symbol, { filterTF, maxDrawdownPct, dualTFConfirm, strictTrend });
     if (r?.isRightStable) {
       results.push({
         symbol: item.symbol,

@@ -6,8 +6,8 @@
 export const PUMP_SMART_MIN_CHANGE = parseFloat(process.env.PUMP_SMART_MIN_CHANGE || '20', 10);
 export const PUMP_SMART_MIN_SMART_SCORE = parseInt(process.env.PUMP_SMART_MIN_SMART_SCORE || '2', 10);
 export const PUMP_SMART_SCAN_LIMIT = parseInt(process.env.PUMP_SMART_SCAN_LIMIT || '30', 10);
-export const PUMP_SMART_INTERVAL_MIN = parseInt(process.env.PUMP_SMART_INTERVAL_MIN || '15', 10);
-export const REALTIME_ALERT_INTERVAL_MIN = parseInt(process.env.REALTIME_ALERT_INTERVAL_MIN || process.env.PUMP_SMART_INTERVAL_MIN || '15', 10);
+export const PUMP_SMART_INTERVAL_MIN = parseInt(process.env.PUMP_SMART_INTERVAL_MIN || '60', 10);
+export const REALTIME_ALERT_INTERVAL_MIN = parseInt(process.env.REALTIME_ALERT_INTERVAL_MIN || process.env.PUMP_SMART_INTERVAL_MIN || '60', 10);
 
 export async function analyzeSmartMoneyLongAdd(symbol, proxyBinance) {
   const sym = symbol.toUpperCase();
@@ -151,7 +151,7 @@ export function buildPumpGainerAlertElements(gainers, { fmtPrice, pushCounts = {
 export function buildPumpSmartAlertElements(alerts, { fmtPrice, pushCounts = {} } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const elements = [
-    { tag: 'markdown', content: `**⏰ ${now}**\n**条件:** 8点来涨幅≥${PUMP_SMART_MIN_CHANGE}% + 聪明钱加仓做多（≥${PUMP_SMART_MIN_SMART_SCORE}项确认）\n_触发后每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟重复提醒，直至条件消失_` },
+    { tag: 'markdown', content: `**⏰ ${now}**\n**条件:** 8点来涨幅≥${PUMP_SMART_MIN_CHANGE}% + 聪明钱连续加仓（≥${PUMP_SMART_MIN_SMART_SCORE}项确认）\n_聪明钱分数上升时提醒，同一币种每 ${PUMP_SMART_INTERVAL_MIN} 分钟最多 1 次_` },
   ];
 
   if (!alerts.length) {

@@ -396,6 +396,44 @@
   .sim-log-item.log-sl .log-action { color: var(--red); }
   .sim-equity-canvas { width: 100% !important; height: 150px !important; cursor: crosshair; margin-top: 12px; }
 
+  .pos-health-section {
+    background: var(--card); border: 1px solid var(--border); border-radius: 10px;
+    padding: 16px; margin-bottom: 20px;
+  }
+  .pos-health-header { display: flex; align-items: center; justify-content: space-between; cursor: pointer; }
+  .pos-health-header h3 { font-size: 15px; color: var(--yellow); margin: 0; }
+  .pos-health-toggle { font-size: 12px; color: var(--text2); }
+  .pos-health-form {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-end; margin-bottom: 12px;
+  }
+  .pos-health-form label { font-size: 11px; color: var(--text2); display: block; margin-bottom: 3px; }
+  .pos-health-form input, .pos-health-form select {
+    background: var(--bg); border: 1px solid var(--border); color: var(--text);
+    padding: 5px 8px; border-radius: 6px; font-size: 12px;
+  }
+  .pos-health-form .field { min-width: 100px; }
+  .pos-health-btn {
+    background: var(--blue); color: #fff; border: none; padding: 7px 14px;
+    border-radius: 6px; font-size: 12px; font-weight: 600; cursor: pointer;
+  }
+  .pos-health-card {
+    padding: 12px 14px; background: var(--bg); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: 8px; font-size: 12px;
+  }
+  .pos-health-card .ph-top { display: flex; align-items: center; justify-content: space-between; gap: 8px; flex-wrap: wrap; }
+  .pos-health-badge {
+    padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 700;
+  }
+  .pos-health-badge.healthy { background: rgba(63,185,80,0.15); color: var(--green); }
+  .pos-health-badge.warning { background: rgba(210,153,34,0.15); color: var(--yellow); }
+  .pos-health-badge.critical { background: rgba(248,81,73,0.15); color: var(--red); }
+  .pos-health-reasons { margin-top: 8px; color: var(--text2); line-height: 1.5; font-size: 11px; }
+  .pos-health-action { margin-top: 6px; font-weight: 600; }
+  .pos-health-empty { padding: 12px; text-align: center; color: var(--text2); font-size: 12px; }
+  .pos-dir { font-weight: 700; padding: 2px 8px; border-radius: 4px; font-size: 11px; display: inline-block; }
+  .pos-dir.long { background: rgba(63,185,80,0.15); color: var(--green); }
+  .pos-dir.short { background: rgba(248,81,73,0.15); color: var(--red); }
+
   .alert-section {
     background: var(--card); border: 1px solid var(--border); border-radius: 10px;
     padding: 16px; margin-bottom: 20px;
@@ -476,6 +514,27 @@
 <div class="signals" id="signals"></div>
 <div class="smart-signal-panel" id="smartSignalPanel"></div>
 <div class="entry-rec" id="entryRec"></div>
+
+<div class="pos-health-section" id="posHealthSection">
+  <div class="pos-health-header" onclick="togglePosHealthPanel()">
+    <h3>💊 持仓健康</h3>
+    <span class="pos-health-toggle" id="posHealthToggle">展开</span>
+  </div>
+  <div class="pos-health-body" id="posHealthBody" style="display:none;">
+    <div class="pos-health-form">
+      <div class="field"><label>币种</label><input id="phSymbol" placeholder="BTC" style="width:80px;"></div>
+      <div class="field"><label>方向</label>
+        <select id="phDirection"><option value="long">做多</option><option value="short">做空</option></select>
+      </div>
+      <div class="field"><label>开仓价</label><input id="phEntry" type="number" step="any" placeholder="0.00"></div>
+      <div class="field"><label>止损(可选)</label><input id="phSL" type="number" step="any" placeholder="自动"></div>
+      <div class="field"><label>止盈(可选)</label><input id="phTP" type="number" step="any" placeholder="自动"></div>
+      <button class="pos-health-btn" onclick="addUserPosition()">添加持仓</button>
+      <button class="pos-health-btn" style="background:var(--border);color:var(--text);" onclick="refreshAllPositionHealth()">刷新健康</button>
+    </div>
+    <div id="posHealthList"></div>
+  </div>
+</div>
 
 <div class="kline-section">
   <div class="kline-header">
@@ -1776,6 +1835,21 @@ async function fetchAndDrawKlines() {
   }
 }
 
+function assessTrendBias(closes, lows, highs) {
+  const n = closes.length - 1;
+  const cur = closes[n];
+  const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+  const ma60 = closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : ma20;
+  const chg5 = n >= 5 && closes[n - 5] > 0 ? (cur - closes[n - 5]) / closes[n - 5] : 0;
+  let downBars = 0;
+  for (let i = Math.max(1, n - 4); i <= n; i++) {
+    if (closes[i] < closes[i - 1]) downBars++;
+  }
+  const bearish = cur < ma20 && (ma20 <= ma60 || chg5 < -0.03 || downBars >= 4);
+  const bullish = cur > ma20 && ma20 > ma60 && chg5 > 0 && downBars <= 2;
+  return { bearish, bullish, ma20, ma60, chg5, downBars };
+}
+
 function renderEntryRecommendation(klines, rsi6) {
   const el = document.getElementById('entryRec');
   if (!klines || klines.length < 30) { el.classList.remove('show'); return; }
@@ -1787,6 +1861,7 @@ function renderEntryRecommendation(klines, rsi6) {
 
   const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
   const ma60 = closes.length >= 60 ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60 : ma20;
+  const trend = assessTrendBias(closes, lows, highs);
 
   // Support: recent N-bar lows
   const recentLows = lows.slice(-30);
@@ -1826,18 +1901,22 @@ function renderEntryRecommendation(klines, rsi6) {
     reasons.push(`接近近期支撑 $${support.toFixed(4)}`);
   }
 
-  // Priority 3: RSI signals
-  if (latestRSI < 35) {
+  // Priority 3: RSI signals (下跌趋势中不视为做多信号)
+  if (latestRSI < 35 && !trend.bearish) {
     reasons.push(`RSI(6)=${latestRSI.toFixed(1)} 超卖区`);
     signal = 'buy';
+  } else if (latestRSI < 35 && trend.bearish) {
+    reasons.push(`RSI(6)=${latestRSI.toFixed(1)} 超卖但趋势仍空`);
   } else if (latestRSI < 50) {
     reasons.push(`RSI(6)=${latestRSI.toFixed(1)} 偏低`);
   }
 
   // Priority 4: MACD
-  if (macdCrossing) {
+  if (macdCrossing && !trend.bearish) {
     reasons.push('MACD 刚金叉');
     signal = 'buy';
+  } else if (macdCrossing && trend.bearish) {
+    reasons.push('MACD 金叉但趋势仍空，慎追');
   } else if (macdConverging) {
     reasons.push('MACD 即将金叉（DIF向DEA收敛）');
   }
@@ -1848,6 +1927,12 @@ function renderEntryRecommendation(klines, rsi6) {
     if (signal !== 'buy') signal = 'hold';
   }
 
+  // 下跌趋势：禁止做多推荐
+  if (trend.bearish) {
+    reasons.unshift(`⚠️ 下跌趋势（价<MA20${trend.downBars >= 4 ? '·连续阴跌' : ''}），不建议抄底做多`);
+    if (signal === 'buy' || signal === 'hold') signal = 'wait';
+  }
+
   // Priority 6: Smart money (from fetchData)
   const sd = window._lastSmartData;
   if (sd && sd.topPositions && sd.topPositions.length >= 3) {
@@ -1855,7 +1940,8 @@ function renderEntryRecommendation(klines, rsi6) {
     const latR = parseFloat(posArr[posArr.length - 1].longShortRatio);
     const prev3 = posArr.slice(-3).map(d => parseFloat(d.longShortRatio));
     const posTrend = prev3[2] - prev3[0];
-    if (latR > 1.1 && posTrend > 0.05) { reasons.push(`大户持续加多 (${latR.toFixed(2)}↑)`); signal = signal === 'wait' ? 'hold' : signal; }
+    if (latR > 1.1 && posTrend > 0.05 && !trend.bearish) { reasons.push(`大户持续加多 (${latR.toFixed(2)}↑)`); signal = signal === 'wait' ? 'hold' : signal; }
+    else if (latR > 1.1 && posTrend > 0.05 && trend.bearish) { reasons.push(`大户加多但价格仍跌 (${latR.toFixed(2)}↑)`); }
     else if (latR < 0.9 && posTrend < -0.05) { reasons.push(`大户持续减多 (${latR.toFixed(2)}↓)`); }
   }
   if (sd && sd.takerVol && sd.takerVol.length >= 3) {
@@ -1912,6 +1998,10 @@ function renderEntryRecommendation(klines, rsi6) {
     sellReasons.push('均线空头排列 (价格<MA20<MA60)');
     sellSignal = 'sell';
   }
+  if (trend.bearish) {
+    sellReasons.unshift('价格处于下跌趋势');
+    if (sellSignal === 'wait') sellSignal = 'sell';
+  }
 
   // Smart money sell signals
   if (sd && sd.topPositions && sd.topPositions.length >= 3) {
@@ -1944,8 +2034,10 @@ function renderEntryRecommendation(klines, rsi6) {
   const sellRR = (sellStop - sellPrice) > 0 ? ((sellPrice - sellTarget) / (sellStop - sellPrice)).toFixed(1) : '--';
 
   // Score comparison: determine dominant direction
-  const buyScore = (signal === 'buy' ? 3 : signal === 'hold' ? 1 : 0) + reasons.length;
-  const sellScore = (sellSignal === 'sell' ? 3 : 0) + sellReasons.length;
+  let buyScore = (signal === 'buy' ? 3 : signal === 'hold' ? 1 : 0) + reasons.filter(r => !r.startsWith('⚠️')).length;
+  let sellScore = (sellSignal === 'sell' ? 3 : 0) + sellReasons.length;
+  if (trend.bearish) { buyScore = Math.min(buyScore, 1); sellScore += 2; }
+  if (trend.bullish) { buyScore += 1; }
   const dominant = buyScore > sellScore ? 'long' : sellScore > buyScore ? 'short' : 'neutral';
 
   const dominantLabel = dominant === 'long' ? '📈 主导方向：<span style="color:var(--green);font-weight:700;">做多</span>'
@@ -3686,6 +3778,7 @@ async function checkCoinDirection(sym) {
     const support = Math.min(...lows.slice(-20));
     const resistance = Math.max(...highs.slice(-10));
     const distMA20 = (cur - ma20) / ma20;
+    const trend = assessTrendBias(closes, lows, highs);
 
     let buyScore = 0, sellScore = 0;
     let buyReasons = [], sellReasons = [];
@@ -3711,7 +3804,8 @@ async function checkCoinDirection(sym) {
     const rsiOBV = getV('rsi_ob'), rsiOBW = getW('rsi_ob');
     if (rsiOBV !== '忽略' && latestRSI > 70) { sellScore += rsiOBW; sellReasons.push('RSI超买'); }
     const rsiOSV = getV('rsi_os'), rsiOSW = getW('rsi_os');
-    if (rsiOSV !== '忽略' && latestRSI < 30) { buyScore += rsiOSW; buyReasons.push('RSI超卖'); }
+    if (rsiOSV !== '忽略' && latestRSI < 30 && !trend.bearish) { buyScore += rsiOSW; buyReasons.push('RSI超卖'); }
+    if (rsiOSV !== '忽略' && latestRSI < 30 && trend.bearish) { sellScore += 1; sellReasons.push('RSI超卖但趋势空'); }
 
     // MACD cross
     const macdV = getV('macd_cross'), macdW = getW('macd_cross');
@@ -3800,7 +3894,8 @@ async function checkCoinDirection(sym) {
       if (topV !== '忽略' && pos && pos.length >= 2) {
         const latestR = parseFloat(pos[pos.length - 1].longShortRatio);
         const prevR = parseFloat(pos[pos.length - 2].longShortRatio);
-        if (latestR > 1.1 && latestR > prevR) { buyScore += topW; buyReasons.push(`大户偏多↑(${latestR.toFixed(2)})`); }
+        if (latestR > 1.1 && latestR > prevR && !trend.bearish) { buyScore += topW; buyReasons.push(`大户偏多↑(${latestR.toFixed(2)})`); }
+        if (latestR > 1.1 && latestR > prevR && trend.bearish) { sellScore += 1; sellReasons.push(`大户偏多但价跌(${latestR.toFixed(2)})`); }
         if (latestR < 0.9 && latestR < prevR) { sellScore += topW; sellReasons.push(`大户偏空↓(${latestR.toFixed(2)})`); }
       }
       const takerW = getW('taker_buy'), takerV = getV('taker_buy');
@@ -3808,10 +3903,17 @@ async function checkCoinDirection(sym) {
       if (takerV !== '忽略' && taker && taker.length >= 2) {
         const latestBS = parseFloat(taker[taker.length - 1].buySellRatio);
         const prevBS = parseFloat(taker[taker.length - 2].buySellRatio);
-        if (latestBS > 1.1 && latestBS > prevBS) { buyScore += takerW; buyReasons.push(`主动买入↑(${latestBS.toFixed(2)})`); }
+        if (latestBS > 1.1 && latestBS > prevBS && !trend.bearish) { buyScore += takerW; buyReasons.push(`主动买入↑(${latestBS.toFixed(2)})`); }
         if (latestBS < 0.9 && latestBS < prevBS) { sellScore += takerW; sellReasons.push(`主动卖出↓(${latestBS.toFixed(2)})`); }
       }
     }
+
+    if (trend.bearish) {
+      buyScore = Math.min(buyScore, 1);
+      sellScore += 2;
+      if (!sellReasons.some(r => r.includes('趋势'))) sellReasons.unshift('下跌趋势');
+    }
+    if (trend.bullish) buyScore += 1;
 
     return { buyScore, sellScore, buyReasons, sellReasons, detail: buyReasons.join(',') + ' | ' + sellReasons.join(',') };
   } catch { return { buyScore: 0, sellScore: 0, buyReasons: [], sellReasons: [] }; }
@@ -3929,7 +4031,10 @@ async function scanRecCoins(direction) {
     const r = await checkCoinDirection(item.symbol);
     scanProgress.done++;
     const score = isLong ? r.buyScore : r.sellScore;
-    if (score >= 3) {
+    const passes = isLong
+      ? score >= 3 && r.buyScore > r.sellScore
+      : score >= 3 && r.sellScore > r.buyScore;
+    if (passes) {
       const entry = { symbol: item.symbol, label: item.symbol.replace('USDT',''), score, detail: (isLong ? r.buyReasons : r.sellReasons).join(' / '), volume: item.volume, change: item.change };
       if (isLong) recLongResults.push(entry);
       else recShortResults.push(entry);
@@ -4839,8 +4944,11 @@ function renderPositionCards() {
     const curPrice = _simPriceCache[pos.symbol] || 0;
     const pnl = calcPosPnl(pos, curPrice);
     const pnlPct = (pnl / (pos.margin)) * 100;
+    const hKey = `${pos.symbol}_${pos.direction}_${pos.entryPrice}`;
+    const h = _healthCache[hKey];
+    const healthBadge = h ? `<span class="pos-health-badge ${h.health}">${h.healthLabel} · ${h.actionLabel}</span>` : '';
     return `<div class="sim-pos-card">
-      <span><span class="pos-dir ${pos.direction}">${pos.direction === 'long' ? '做多' : '做空'}</span> ${pos.symbol}</span>
+      <span><span class="pos-dir ${pos.direction}">${pos.direction === 'long' ? '做多' : '做空'}</span> ${pos.symbol} ${healthBadge}</span>
       <span>开仓 $${pos.entryPrice.toFixed(pos.entryPrice < 1 ? 6 : 2)}</span>
       <span>数量 ${pos.qty.toFixed(4)}</span>
       <span>杠杆 ${pos.leverage}x</span>
@@ -4861,6 +4969,174 @@ function calcPosPnl(pos, curPrice) {
 }
 
 let _simPriceCache = {};
+let _healthCache = {};
+let _userPositions = [];
+let _posHealthTimer = null;
+
+function togglePosHealthPanel() {
+  const body = document.getElementById('posHealthBody');
+  const toggle = document.getElementById('posHealthToggle');
+  const open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  toggle.textContent = open ? '收起' : '展开';
+  if (open) {
+    loadUserPositions();
+    startPosHealthPolling();
+  }
+}
+
+async function loadUserPositions() {
+  try {
+    const res = await fetch('/api/user-positions');
+    if (res.status === 404) {
+      document.getElementById('posHealthList').innerHTML =
+        '<div class="pos-health-empty">接口未就绪，请先重启服务：<code>npm.cmd run dev:restart</code></div>';
+      return;
+    }
+    _userPositions = await res.json();
+    await refreshAllPositionHealth();
+  } catch (e) {
+    document.getElementById('posHealthList').innerHTML =
+      `<div class="pos-health-empty">加载失败: ${e.message}</div>`;
+  }
+}
+
+async function addUserPosition() {
+  const symRaw = document.getElementById('phSymbol').value.trim().toUpperCase();
+  const symbol = symRaw.endsWith('USDT') ? symRaw : symRaw + 'USDT';
+  const direction = document.getElementById('phDirection').value;
+  const entryPrice = document.getElementById('phEntry').value;
+  const stopLoss = document.getElementById('phSL').value;
+  const takeProfit = document.getElementById('phTP').value;
+  if (!symRaw || !entryPrice) { alert('请填写币种和开仓价'); return; }
+  try {
+    const res = await fetch('/api/user-positions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ symbol, direction, entryPrice, stopLoss, takeProfit }),
+    });
+    if (res.status === 404) {
+      throw new Error('接口不存在，请重启服务：npm.cmd run dev:restart');
+    }
+    const data = await res.json();
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
+    document.getElementById('phEntry').value = '';
+    document.getElementById('phSL').value = '';
+    document.getElementById('phTP').value = '';
+    await loadUserPositions();
+  } catch (e) {
+    alert('添加失败: ' + e.message);
+  }
+}
+
+async function deleteUserPosition(id) {
+  if (!confirm('确认删除此持仓记录？')) return;
+  try {
+    await fetch(`/api/user-positions?id=${encodeURIComponent(id)}`, { method: 'DELETE' });
+    await loadUserPositions();
+  } catch (e) {
+    alert('删除失败: ' + e.message);
+  }
+}
+
+function healthCacheKey(pos) {
+  return `${pos.symbol}_${pos.direction}_${pos.entryPrice}`;
+}
+
+async function refreshAllPositionHealth() {
+  const allPositions = [
+    ..._userPositions.map(p => ({
+      id: p.id, source: 'manual', symbol: p.symbol, direction: p.direction,
+      entryPrice: p.entryPrice, stopLoss: p.stopLoss, takeProfit: p.takeProfit,
+    })),
+    ...simState.positions.map((p, i) => ({
+      id: `sim_${i}`, source: 'sim', symbol: p.symbol, direction: p.direction,
+      entryPrice: p.entryPrice, stopLoss: p.sl, takeProfit: p.tp,
+    })),
+  ];
+
+  if (allPositions.length === 0) {
+    document.getElementById('posHealthList').innerHTML =
+      '<div class="pos-health-empty">暂无持仓。手动添加，或在模拟交易中开仓后自动显示。</div>';
+    return;
+  }
+
+  try {
+    const res = await fetch('/api/position-health/batch', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        positions: allPositions.map(p => ({
+          symbol: p.symbol,
+          direction: p.direction,
+          entryPrice: p.entryPrice,
+          stopLoss: p.stopLoss,
+          takeProfit: p.takeProfit,
+        })),
+      }),
+    });
+    const results = await res.json();
+    if (results.error) throw new Error(results.error);
+
+    results.forEach((h, i) => {
+      const pos = allPositions[i];
+      if (pos && !h.error) _healthCache[healthCacheKey(pos)] = h;
+    });
+
+    renderPosHealthList(allPositions, results);
+    const simPanel = document.getElementById('simPositions');
+    if (simPanel && simState.positions.length > 0) simPanel.innerHTML = renderPositionCards();
+  } catch (e) {
+    document.getElementById('posHealthList').innerHTML =
+      `<div class="pos-health-empty">健康检查失败: ${e.message}</div>`;
+  }
+}
+
+function renderPosHealthList(positions, healthResults) {
+  const el = document.getElementById('posHealthList');
+  el.innerHTML = positions.map((pos, i) => {
+    const h = healthResults[i];
+    if (!h || h.error) {
+      return `<div class="pos-health-card"><span>${pos.symbol} 检查失败</span></div>`;
+    }
+    const src = pos.source === 'sim' ? '模拟' : '手动';
+    const delBtn = pos.source === 'manual'
+      ? `<button onclick="deleteUserPosition('${pos.id}')" style="background:var(--border);border:none;color:var(--text);padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;">删除</button>`
+      : '';
+    return `<div class="pos-health-card">
+      <div class="ph-top">
+        <span>
+          <span class="pos-dir ${pos.direction}">${pos.direction === 'long' ? '做多' : '做空'}</span>
+          <strong>${h.label || pos.symbol}</strong>
+          <span style="color:var(--text2);font-size:11px;">[${src}]</span>
+        </span>
+        <span class="pos-health-badge ${h.health}">${h.healthLabel} ${h.healthScore}分</span>
+      </div>
+      <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:12px;">
+        <span>开仓 $${h.entryPrice}</span>
+        <span>现价 $${h.currentPrice}</span>
+        <span style="color:${h.pnlPct >= 0 ? 'var(--green)' : 'var(--red)'};">盈亏 ${h.pnlPct >= 0 ? '+' : ''}${h.pnlPct}%</span>
+        <span>信号${h.signalValid ? '有效' : '失效'}</span>
+        ${delBtn}
+      </div>
+      <div class="pos-health-action" style="color:${h.health === 'critical' ? 'var(--red)' : h.health === 'warning' ? 'var(--yellow)' : 'var(--green)'};">
+        👉 ${h.actionLabel}
+        ${h.stopLoss ? ` | SL $${Number(h.stopLoss).toFixed(4)}` : ''}
+        ${h.takeProfit ? ` | TP $${Number(h.takeProfit).toFixed(4)}` : ''}
+      </div>
+      <div class="pos-health-reasons">${(h.reasons || []).slice(0, 4).map(r => `• ${r}`).join('<br>')}</div>
+    </div>`;
+  }).join('');
+}
+
+function startPosHealthPolling() {
+  if (_posHealthTimer) clearInterval(_posHealthTimer);
+  _posHealthTimer = setInterval(() => {
+    if (document.getElementById('posHealthBody').style.display !== 'none') {
+      refreshAllPositionHealth();
+    }
+  }, 60000);
+}
 
 function calcUnrealizedPnl() {
   const sd = window._lastSmartData;
@@ -4965,6 +5241,7 @@ function closePosition(idx, price, reason) {
 
   notifySimTrade('平仓', `${pos.direction === 'long' ? '🟢多' : '🔴空'} ${pos.symbol}`,
     `价格: $${price.toFixed(pos.entryPrice < 1 ? 6 : 2)}\n原因: ${reasonLabel}\n盈亏: ${pnl >= 0 ? '+' : ''}$${pnl.toFixed(2)}\n余额: $${simState.balance.toFixed(2)}`);
+  maybeRefreshPosHealth();
 }
 
 function openPosition(direction, price, sym) {
@@ -4998,6 +5275,12 @@ function openPosition(direction, price, sym) {
 
   notifySimTrade('开仓', `${direction === 'long' ? '🟢做多' : '🔴做空'} ${sym}`,
     `价格: $${price.toFixed(dec)}\n数量: ${qty.toFixed(4)}\n杠杆: ${cfg.leverage}x\n保证金: $${margin.toFixed(2)}\n止损: $${pos.sl.toFixed(dec)}\n止盈: $${pos.tp.toFixed(dec)}`);
+  maybeRefreshPosHealth();
+}
+
+function maybeRefreshPosHealth() {
+  const body = document.getElementById('posHealthBody');
+  if (body && body.style.display !== 'none') refreshAllPositionHealth();
 }
 
 function notifySimTrade(action, title, detail) {
@@ -5605,6 +5888,7 @@ renderAlerts();
   renderChartRangeBar();
   fetchData();
   startCountdown();
+  startPosHealthPolling();
   setTimeout(() => {
     if (activeFilter === 'gainer') scanGainerCoins();
     else if (activeFilter === 'momentum') scanMomentumCoins();
