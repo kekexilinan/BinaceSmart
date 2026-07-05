@@ -1,4 +1,6 @@
-import { setupProxyFromEnv } from './proxy-setup.mjs';
+import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+
+setupProxyFromEnv();
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
@@ -28,7 +30,7 @@ async function fetchJsonViaCurl(url) {
   const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
   if (proxy) args.push('--proxy', proxy);
   args.push(url);
-  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024 });
+  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024, windowsHide: true });
   return JSON.parse(stdout.trim());
 }
 
@@ -162,12 +164,6 @@ export function analyzeSmartSignal(raw, price = null) {
     totalPositions: parseFloat(raw.totalPositions) || 0,
     updateTime: raw.updateTime,
   };
-}
-
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
 }
 
 async function pmap(items, fn, concurrency = 2) {

@@ -1,14 +1,8 @@
-import { setupProxyFromEnv } from './proxy-setup.mjs';
+import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
 
 setupProxyFromEnv();
 
 const FAPI_BASE = 'https://fapi.binance.com';
-
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
 
 function calcDrawdownFromPeak(highs, closes, lookback = 48) {
   const slice = highs.slice(-lookback);

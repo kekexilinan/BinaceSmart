@@ -8,9 +8,14 @@
   },
   "scripts": {
     "dev": "node --use-env-proxy server.mjs",
+    "dev:restart": "node dev-restart.mjs",
     "start": "node --use-env-proxy server.mjs",
+    "service:install": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/install-service.ps1",
+    "service:stop": "powershell -NoProfile -ExecutionPolicy Bypass -File scripts/stop-service.ps1",
+    "service:logs": "powershell -NoProfile -Command \"Get-Content logs/service-out.log -Tail 30; Write-Host '---'; Get-Content logs/service-error.log -Tail 15\"",
     "monitor": "node --use-env-proxy smart-money.mjs SLXUSDT 60",
     "monitor:btc": "node --use-env-proxy smart-money.mjs BTCUSDT 60",
     "monitor:eth": "node --use-env-proxy smart-money.mjs ETHUSDT 60"
-  }
+  },
+  "devDependencies": {}
 }

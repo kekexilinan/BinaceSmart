@@ -581,8 +581,45 @@ const defaultCoins = [
   { symbol: 'ESPORTSUSDT', label: 'ESPORTS' },
   { symbol: 'PLAYUSDT', label: 'PLAY' },
   { symbol: 'BEATUSDT', label: 'BEAT' },
-  { symbol: 'BTCUSDT', label: 'BTC' },
 ];
+
+let appConfig = { maxMarketCapUsd: 5e9, maxMarketCapLabel: '$50亿' };
+
+async function loadAppConfig() {
+  try {
+    const res = await fetch('/api/config');
+    Object.assign(appConfig, await res.json());
+  } catch {}
+}
+
+async function isSymbolEligible(sym) {
+  if (!appConfig.maxMarketCapUsd) return true;
+  try {
+    const res = await fetch(`/api/marketcap?symbol=${sym}`);
+    const d = await res.json();
+    return !(d.market_cap > 0 && d.market_cap > appConfig.maxMarketCapUsd);
+  } catch {
+    return true;
+  }
+}
+
+async function filterPresetCoinsByMarketCap() {
+  if (!appConfig.maxMarketCapUsd) return;
+  const kept = [];
+  for (const c of presetCoins) {
+    if (await isSymbolEligible(c.symbol)) kept.push(c);
+  }
+  if (kept.length !== presetCoins.length) {
+    presetCoins = kept.length ? kept : [{ symbol: 'SLXUSDT', label: 'SLX' }];
+    saveCoins();
+  }
+  if (!(await isSymbolEligible(symbol))) {
+    symbol = presetCoins[0]?.symbol || 'SLXUSDT';
+    const url = new URL(window.location);
+    url.searchParams.set('symbol', symbol);
+    history.replaceState(null, '', url);
+  }
+}
 
 function loadCoins() {
   try {
@@ -646,6 +683,17 @@ let gainerLastScan = 0;
 let gainerBaselineLabel = '';
 let gainerError = '';
 const GAINER_REFRESH_MS = 5 * 60 * 1000;
+
+// Strategy review
+let strategyReviewData = null;
+let strategyReviewLoading = false;
+let strategyReviewLastFetch = 0;
+
+// 8点追涨 momentum
+let momentumResults = [];
+let momentumLoading = false;
+let momentumLastScan = 0;
+let momentumBaselineLabel = '';
 
 const CHART_RANGE_OPTIONS = [
   { value: '12h', label: '12H', limits: { ratio: 12, oi: 6, taker: 144 } },
@@ -2116,10 +2164,15 @@ function setDataStatus(ok, message = '') {
 
 async function fetchData() {
   try {
+    if (appConfig.maxMarketCapUsd > 0 && !(await isSymbolEligible(symbol))) {
+      setDataStatus(false, `该币种市值超过 ${appConfig.maxMarketCapLabel}，不在监控范围`);
+      document.getElementById('title').textContent = `${symbol}（超出市值范围）`;
+      return;
+    }
     const rangeOpt = CHART_RANGE_OPTIONS.find(r => r.value === chartRange) || CHART_RANGE_OPTIONS[2];
     const res = await fetch(`/api/data?symbol=${symbol}&ratioLimit=${rangeOpt.limits.ratio}&oiLimit=${rangeOpt.limits.oi}&takerLimit=${rangeOpt.limits.taker}`);
     const data = await res.json();
-    if (data.error) throw new Error(data.error);
+    if (!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
     window._lastSmartData = data;
     if (data.warnings?.length) {
       setDataStatus(true);
@@ -2227,6 +2280,66 @@ function renderCoinTabs() {
   const wrap = document.getElementById('coinListWrap');
   const btn = document.getElementById('showMoreBtn');
 
+  if (activeFilter === 'strategy_review') {
+    wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+    if (strategyReviewLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">加载策略复盘...</span>';
+      return;
+    }
+    const reviews = strategyReviewData?.reviews || [];
+    if (!reviews.length) {
+      el.innerHTML = '<div style="font-size:12px;color:var(--text2);line-height:1.6;padding:4px 0;">暂无复盘记录<br><span style="font-size:11px;">服务启动后需积累4小时预测快照，之后每4h（0/4/8/12/16/20点）自动复盘</span></div>';
+      return;
+    }
+    const latest = reviews[reviews.length - 1];
+    const time = new Date(latest.ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const snapTime = new Date(latest.sinceSnapshotTs).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    let html = `<div style="font-size:11px;line-height:1.7;padding:4px 0;max-height:420px;overflow-y:auto;">`;
+    html += `<div style="color:var(--text2);margin-bottom:8px;">复盘 ${time} · 对比 ${snapTime}</div>`;
+
+    if (latest.actualTopGainers?.length) {
+      html += `<div style="font-weight:600;margin:6px 0 4px;color:var(--green);">📈 涨幅 Top${latest.actualTopGainers.length}</div>`;
+      html += latest.actualTopGainers.slice(0, 5).map((g, i) => {
+        const missed = latest.longMisses?.find(m => m.symbol === g.symbol);
+        const tag = missed ? `<span style="color:var(--red);">✗遗漏</span>` : `<span style="color:var(--green);">✓</span>`;
+        return `<div>${i + 1}. <b>${g.label}</b> +${g.change.toFixed(1)}% ${tag}</div>`;
+      }).join('');
+    }
+
+    if (latest.actualTopLosers?.length) {
+      html += `<div style="font-weight:600;margin:8px 0 4px;color:var(--red);">📉 跌幅 Top${latest.actualTopLosers.length}</div>`;
+      html += latest.actualTopLosers.slice(0, 5).map((g, i) => {
+        const missed = latest.shortMisses?.find(m => m.symbol === g.symbol);
+        const tag = missed ? `<span style="color:var(--red);">✗遗漏</span>` : `<span style="color:var(--green);">✓</span>`;
+        return `<div>${i + 1}. <b>${g.label}</b> ${g.change.toFixed(1)}% ${tag}</div>`;
+      }).join('');
+    }
+
+    if (latest.shortFalseSignals?.length || latest.shortInGainers?.length) {
+      html += `<div style="font-weight:600;margin:8px 0 4px;color:var(--yellow);">⚠️ 做空但仍在涨</div>`;
+      const items = [...(latest.shortFalseSignals || []), ...(latest.shortInGainers || [])];
+      const seen = new Set();
+      for (const s of items) {
+        if (seen.has(s.symbol)) continue;
+        seen.add(s.symbol);
+        const chg = s.changeSinceSnap ?? s.change ?? 0;
+        html += `<div><b>${s.label}</b> <span style="color:var(--red);">+${chg.toFixed(1)}%</span>${s.gainerRank ? ` · 涨幅#${s.gainerRank}` : ''}</div>`;
+      }
+    }
+
+    if (latest.reflections?.length) {
+      html += `<div style="font-weight:600;margin:8px 0 4px;">💡 反思</div>`;
+      html += latest.reflections.map(r => `<div style="margin-bottom:4px;color:var(--text1);">${escAttr(r.replace(/\*\*/g, ''))}</div>`).join('');
+    }
+
+    if (reviews.length > 1) {
+      html += `<div style="margin-top:8px;color:var(--text2);font-size:10px;">共 ${reviews.length} 条复盘记录</div>`;
+    }
+    html += '</div>';
+    el.innerHTML = html;
+    return;
+  }
+
   if (activeFilter === 'left_side') {
     if (leftSideResults.length === 0 && !rightSideLoading) {
       el.innerHTML = '<span style="font-size:12px;color:var(--text2);">暂无符合左侧交易条件的币种</span>';
@@ -2283,6 +2396,38 @@ function renderCoinTabs() {
       wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
       btn.style.display = '';
       btn.textContent = coinListExpanded ? '收起' : `展开全部 (${dumpRiskResults.length})`;
+    } else {
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+    }
+    return;
+  }
+
+  if (activeFilter === 'momentum') {
+    if (momentumResults.length === 0 && !momentumLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">暂无符合8点追涨条件的币种</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    if (momentumResults.length === 0 && momentumLoading) {
+      el.innerHTML = '<span style="font-size:12px;color:var(--text2);">扫描8点来暴涨动量中...</span>';
+      wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
+      return;
+    }
+    el.innerHTML = momentumResults.map(c => {
+      const chg = c.changeSince8am ?? 0;
+      const chgColor = chg >= 50 ? 'var(--green)' : chg >= 25 ? '#3fb950cc' : 'var(--yellow)';
+      const chgTag = `<span style="color:${chgColor};margin-left:3px;font-size:9px;font-weight:700;">8am ${chg >= 0 ? '+' : ''}${chg.toFixed(1)}%</span>`;
+      const s = c.score || 0;
+      const scoreColor = s >= 4 ? 'var(--green)' : 'var(--yellow)';
+      const scoreTag = `<span style="color:${scoreColor};margin-left:3px;font-size:9px;font-weight:700;">${s}/5</span>`;
+      const sigs = (c.signals || []).slice(0, 2).join(' ');
+      return `<span class="coin-tab ${c.symbol === symbol ? 'active' : ''}" onclick="selectRightCoin('${c.symbol}')" title="${escAttr(c.detail || sigs)}">` +
+        `${c.label}🚀${chgTag}${scoreTag}<span style="color:var(--text2);margin-left:3px;font-size:8px;">${escAttr(sigs)}</span></span>`;
+    }).join('');
+    if (momentumResults.length > 20) {
+      wrap.className = 'coin-list-wrap' + (coinListExpanded ? ' expanded' : ' collapsed');
+      btn.style.display = '';
+      btn.textContent = coinListExpanded ? '收起' : `展开全部 (${momentumResults.length})`;
     } else {
       wrap.className = 'coin-list-wrap'; btn.style.display = 'none';
     }
@@ -2642,6 +2787,7 @@ function removeCoin(sym) {
 const FILTER_DEFS = [
   { id: 'all', label: '全部' },
   { id: 'gainer', label: '涨幅榜·8点' },
+  { id: 'momentum', label: '8点追涨' },
   { id: 'dump_risk', label: '暴跌预警' },
   { id: 'right_side', label: '右侧交易' },
   { id: 'right_stable', label: '右侧稳趋势' },
@@ -2649,6 +2795,7 @@ const FILTER_DEFS = [
   { id: 'rec_long', label: '推荐做多' },
   { id: 'smart_signal', label: '聪明钱信号' },
   { id: 'rec_short', label: '推荐做空' },
+  { id: 'strategy_review', label: '策略复盘' },
 ];
 
 function renderChartRangeBar() {
@@ -2679,6 +2826,10 @@ function renderFilterTabs() {
         const ago = Math.round((Date.now() - gainerLastScan) / 1000);
         extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${ago < 60 ? ago + 's前' : Math.round(ago / 60) + 'm前'}</span>`;
       }
+    }
+    if (f.id === 'momentum') {
+      if (momentumResults.length > 0) badge = `<span class="badge" style="background:var(--green);">${momentumResults.length}</span>`;
+      if (momentumLoading) extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">扫描中</span>`;
     }
     if (f.id === 'dump_risk') {
       if (dumpRiskResults.length > 0) badge = `<span class="badge" style="background:var(--red);">${dumpRiskResults.length}</span>`;
@@ -2722,7 +2873,11 @@ function renderFilterTabs() {
         extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">${scanProgress.done}/${scanProgress.total}</span>`;
       }
     }
-    const loading = (f.id === 'gainer' && gainerLoading) || (f.id === 'dump_risk' && dumpRiskLoading) || (f.id === 'right_side' && rightSideLoading) || (f.id === 'right_stable' && rightStableLoading) || (f.id === 'rec_long' && recLongLoading) || (f.id === 'rec_short' && recShortLoading) || (f.id === 'smart_signal' && smartSignalLoading) ? ' loading' : '';
+    if (f.id === 'strategy_review') {
+      if (strategyReviewData?.reviews?.length) badge = `<span class="badge" style="background:var(--yellow);">${strategyReviewData.reviews.length}</span>`;
+      if (strategyReviewLoading) extra = `<span style="font-size:9px;color:var(--text2);margin-left:4px;">加载中</span>`;
+    }
+    const loading = (f.id === 'gainer' && gainerLoading) || (f.id === 'momentum' && momentumLoading) || (f.id === 'dump_risk' && dumpRiskLoading) || (f.id === 'right_side' && rightSideLoading) || (f.id === 'right_stable' && rightStableLoading) || (f.id === 'rec_long' && recLongLoading) || (f.id === 'rec_short' && recShortLoading) || (f.id === 'smart_signal' && smartSignalLoading) ? ' loading' : '';
     return `<span class="filter-tab${isActive ? ' active' : ''}${loading}" onclick="switchFilter('${f.id}')">${f.label}${extra}${badge}</span>`;
   }).join('');
 
@@ -2738,17 +2893,23 @@ function renderFilterTabs() {
     `<span class="filter-pill${s.value === sortBy ? ' active' : ''}" onclick="switchSort('${s.value}')">${s.label}</span>`
   ).join('');
 
-  const tfGroup = (activeFilter === 'gainer' || activeFilter === 'smart_signal') ? '' : `
+  const tfGroup = (activeFilter === 'gainer' || activeFilter === 'momentum' || activeFilter === 'smart_signal') ? '' : `
     <span class="filter-sep"></span>
     <div class="filter-group"><span class="filter-group-label">周期</span>${tfBtns}</div>`;
   const gainerRefreshBtn = activeFilter === 'gainer'
     ? `<span class="filter-pill" onclick="scanGainerCoins()" title="立即刷新">↻ 刷新</span>${gainerBaselineLabel ? `<span style="font-size:10px;color:var(--text2);margin-left:6px;">基准 ${gainerBaselineLabel}</span>` : ''}`
+    : '';
+  const momentumRefreshBtn = activeFilter === 'momentum'
+    ? `<span class="filter-pill" onclick="scanMomentumCoins()" title="立即刷新">↻ 刷新</span>${momentumBaselineLabel ? `<span style="font-size:10px;color:var(--text2);margin-left:6px;">基准 ${momentumBaselineLabel}</span>` : ''}<span style="font-size:10px;color:var(--text2);margin-left:6px;">8am≥15% · 动量≥3/5</span>`
     : '';
   const dumpRiskRefreshBtn = activeFilter === 'dump_risk'
     ? `<span class="filter-pill" onclick="scanDumpRiskCoins()" title="立即刷新">↻ 刷新</span><span style="font-size:10px;color:var(--text2);margin-left:6px;">风险≥3 · 远离高危币</span>`
     : '';
   const smartSignalRefreshBtn = activeFilter === 'smart_signal'
     ? `<span class="filter-pill" onclick="scanSmartSignalCoins()" title="立即刷新">↻ 刷新</span><span style="font-size:10px;color:var(--text2);margin-left:6px;">净多[B] · 限流保护</span>`
+    : '';
+  const reviewRefreshBtn = activeFilter === 'strategy_review'
+    ? `<span class="filter-pill" onclick="fetchStrategyReview()" title="刷新复盘">↻ 刷新</span><span class="filter-pill" onclick="triggerStrategyReview()" title="立即执行一次复盘">▶ 立即复盘</span><span style="font-size:10px;color:var(--text2);margin-left:6px;">每4h自动对比预测 vs 涨跌幅榜</span>`
     : '';
   const stableOpts = activeFilter === 'right_stable' ? `
     <span class="filter-sep"></span>
@@ -2762,10 +2923,11 @@ function renderFilterTabs() {
     <div class="filter-tabs">${tabs}</div>
     ${tfGroup}
     <span class="filter-sep"></span>
-    <div class="filter-group"><span class="filter-group-label">${activeFilter === 'gainer' ? 'Top' : '范围'}</span>${rangeBtns}${gainerRefreshBtn}${dumpRiskRefreshBtn}${smartSignalRefreshBtn}</div>
+    <div class="filter-group"><span class="filter-group-label">${activeFilter === 'gainer' ? 'Top' : activeFilter === 'strategy_review' ? '' : '范围'}</span>${activeFilter === 'strategy_review' ? reviewRefreshBtn : activeFilter === 'momentum' ? momentumRefreshBtn : rangeBtns + gainerRefreshBtn + dumpRiskRefreshBtn + smartSignalRefreshBtn}</div>
     ${stableOpts}
     <span class="filter-sep"></span>
     <div class="filter-group"><span class="filter-group-label">排序</span>${sortBtns}</div>
+    ${appConfig.maxMarketCapUsd > 0 ? `<span class="filter-sep"></span><span style="font-size:10px;color:var(--text2);align-self:center;">市值≤${appConfig.maxMarketCapLabel}</span>` : ''}
   `;
 }
 
@@ -2779,6 +2941,9 @@ function switchFilter(filterId) {
   renderFilterTabs();
   if (filterId === 'gainer' && !gainerLoading) {
     scanGainerCoins();
+  }
+  if (filterId === 'momentum' && !momentumLoading) {
+    scanMomentumCoins();
   }
   if (filterId === 'dump_risk' && dumpRiskResults.length === 0 && !dumpRiskLoading) {
     scanDumpRiskCoins();
@@ -2801,6 +2966,9 @@ function switchFilter(filterId) {
   if (filterId === 'rec_short' && recShortResults.length === 0 && !recShortLoading) {
     scanRecCoins('short');
   }
+  if (filterId === 'strategy_review' && !strategyReviewLoading) {
+    fetchStrategyReview();
+  }
   renderCoinTabs();
 }
 
@@ -2815,6 +2983,7 @@ function clearAllScanCache() {
   recShortResults = [];
   smartSignalResults = [];
   gainerResults = [];
+  momentumResults = [];
   rightStableResults = [];
   rightStableCache = {};
   dumpRiskResults = [];
@@ -2855,6 +3024,7 @@ function switchFilterTF(tf) {
   else if (activeFilter === 'smart_signal') scanSmartSignalCoins();
   else if (activeFilter === 'rec_short') scanRecCoins('short');
   else if (activeFilter === 'gainer') scanGainerCoins();
+  else if (activeFilter === 'momentum') scanMomentumCoins();
 }
 
 function switchScanRange(n) {
@@ -2871,6 +3041,7 @@ function switchScanRange(n) {
   else if (activeFilter === 'smart_signal') scanSmartSignalCoins();
   else if (activeFilter === 'rec_short') scanRecCoins('short');
   else if (activeFilter === 'gainer') scanGainerCoins();
+  else if (activeFilter === 'momentum') scanMomentumCoins();
 }
 
 function switchSort(s) {
@@ -2881,6 +3052,7 @@ function switchSort(s) {
   sortRightStableResults();
   sortSmartSignalResults();
   sortGainerResults();
+  sortMomentumResults();
   renderFilterTabs();
   renderCoinTabs();
 }
@@ -2946,6 +3118,76 @@ async function scanGainerCoins() {
   renderFilterTabs();
   renderCoinTabs();
   scheduleGainerRefresh();
+}
+
+async function scanMomentumCoins() {
+  momentumLoading = true;
+  renderFilterTabs();
+  renderCoinTabs();
+  try {
+    const res = await fetch(`/api/scan-momentum?limit=${Math.min(scanTopLimit, 30)}&minScore=3`);
+    if (!res.ok) throw new Error(`请求失败 (${res.status})`);
+    const data = await res.json();
+    if (data.error) throw new Error(data.error);
+    if (data.meta?.baselineLabel) momentumBaselineLabel = data.meta.baselineLabel;
+    momentumResults = (data.items || []).map(item => ({
+      symbol: item.symbol,
+      label: item.label || item.symbol.replace('USDT', ''),
+      score: item.score,
+      changeSince8am: item.changeSince8am,
+      price: item.price,
+      detail: item.detail,
+      signals: item.signals,
+    }));
+    sortMomentumResults();
+  } catch (e) {
+    console.error('scanMomentumCoins', e);
+    momentumResults = [];
+  }
+  momentumLoading = false;
+  momentumLastScan = Date.now();
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+function sortMomentumResults() {
+  switch (sortBy) {
+    case 'score':
+      momentumResults.sort((a, b) => (b.score || 0) - (a.score || 0) || (b.changeSince8am || 0) - (a.changeSince8am || 0));
+      break;
+    case 'volume':
+      momentumResults.sort((a, b) => (b.volume || 0) - (a.volume || 0));
+      break;
+    default:
+      momentumResults.sort((a, b) => (b.changeSince8am || 0) - (a.changeSince8am || 0) || (b.score || 0) - (a.score || 0));
+  }
+}
+
+async function fetchStrategyReview() {
+  strategyReviewLoading = true;
+  renderFilterTabs();
+  renderCoinTabs();
+  try {
+    const res = await fetch('/api/strategy-review?hours=72');
+    if (!res.ok) throw new Error(`请求失败 (${res.status})`);
+    strategyReviewData = await res.json();
+  } catch (e) {
+    console.error('fetchStrategyReview', e);
+    strategyReviewData = { reviews: [], error: e.message };
+  }
+  strategyReviewLoading = false;
+  strategyReviewLastFetch = Date.now();
+  renderFilterTabs();
+  renderCoinTabs();
+}
+
+async function triggerStrategyReview() {
+  try {
+    await fetch('/api/trigger-strategy-review', { method: 'POST' });
+    setTimeout(() => fetchStrategyReview(), 3000);
+  } catch (e) {
+    console.error('triggerStrategyReview', e);
+  }
 }
 
 function sortRightSideResults() {
@@ -5347,28 +5589,33 @@ if ('Notification' in window && Notification.permission === 'default') {
   Notification.requestPermission();
 }
 renderAlerts();
-document.getElementById('symbolInput').value = symbol;
-const intSelect = document.getElementById('intervalSelect');
-if ([...intSelect.options].some(o => o.value === String(interval))) {
-  intSelect.value = String(interval);
-}
+(async () => {
+  await loadAppConfig();
+  await filterPresetCoinsByMarketCap();
+  document.getElementById('symbolInput').value = symbol;
+  const intSelect = document.getElementById('intervalSelect');
+  if ([...intSelect.options].some(o => o.value === String(interval))) {
+    intSelect.value = String(interval);
+  }
 
-window.addEventListener('resize', () => { fetchData(); });
-renderFilterTabs();
-renderCoinTabs();
-renderTFTabs();
-renderChartRangeBar();
-fetchData();
-startCountdown();
-setTimeout(() => {
-  if (activeFilter === 'gainer') scanGainerCoins();
-  else if (activeFilter === 'right_side') scanRightSideCoins();
-  else if (activeFilter === 'right_stable') scanRightStableCoins();
-  else if (activeFilter === 'left_side') scanLeftSideCoins();
-  else if (activeFilter === 'rec_long') scanRecCoins('long');
-  else if (activeFilter === 'smart_signal') scanSmartSignalCoins();
-  else if (activeFilter === 'rec_short') scanRecCoins('short');
-}, 2000);
+  window.addEventListener('resize', () => { fetchData(); });
+  renderFilterTabs();
+  renderCoinTabs();
+  renderTFTabs();
+  renderChartRangeBar();
+  fetchData();
+  startCountdown();
+  setTimeout(() => {
+    if (activeFilter === 'gainer') scanGainerCoins();
+    else if (activeFilter === 'momentum') scanMomentumCoins();
+    else if (activeFilter === 'right_side') scanRightSideCoins();
+    else if (activeFilter === 'right_stable') scanRightStableCoins();
+    else if (activeFilter === 'left_side') scanLeftSideCoins();
+    else if (activeFilter === 'rec_long') scanRecCoins('long');
+    else if (activeFilter === 'smart_signal') scanSmartSignalCoins();
+    else if (activeFilter === 'rec_short') scanRecCoins('short');
+  }, 2000);
+})();
 </script>
 </body>
 </html>

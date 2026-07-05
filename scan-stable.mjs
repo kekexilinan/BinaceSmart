@@ -1,16 +1,14 @@
+import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+
+setupProxyFromEnv();
+
 const FAPI_BASE = 'https://fapi.binance.com';
 
 const STOCK_COINS = new Set([
-  'COINUSDT',   // Coinbase  (NASDAQ: COIN)
-  'MSTRUSDT',   // MicroStrategy (NASDAQ: MSTR)
-  'HOODUSDT',   // Robinhood (NASDAQ: HOOD)
+  'COINUSDT',
+  'MSTRUSDT',
+  'HOODUSDT',
 ]);
-
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
 
 function calcMA(closes, period) {
   const r = [];

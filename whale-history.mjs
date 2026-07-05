@@ -10,7 +10,7 @@ const HISTORY_FILE = join(DATA_DIR, 'whale-history.json');
 const INTERVAL_MS = parseInt(process.env.WHALE_HISTORY_INTERVAL_MIN || '5', 10) * 60 * 1000;
 const MAX_POINTS = parseInt(process.env.WHALE_HISTORY_MAX_POINTS || '2016', 10);
 const MIN_RECORD_GAP_MS = parseInt(process.env.WHALE_HISTORY_MIN_GAP_MIN || '4', 10) * 60 * 1000;
-const DEFAULT_SYMBOLS = (process.env.WHALE_HISTORY_SYMBOLS || 'BTCUSDT,ETHUSDT,SLXUSDT')
+const DEFAULT_SYMBOLS = (process.env.WHALE_HISTORY_SYMBOLS || 'SLXUSDT')
   .split(',')
   .map(s => s.trim().toUpperCase())
   .filter(Boolean);

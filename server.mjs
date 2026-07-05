@@ -1,18 +1,25 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
-import { execFile } from 'node:child_process';
-import { promisify } from 'node:util';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { scanRightStable } from './scan-stable.mjs';
 import { fetchSmartSignal, analyzeSmartSignal, scanSmartSignal } from './scan-smart-signal.mjs';
-import { setupProxyFromEnv } from './proxy-setup.mjs';
+import { setupProxyFromEnv, fetchJson } from './proxy-setup.mjs';
 import { checkDumpRisk, scanDumpCoins, formatDumpPushContent } from './scan-dump-risk.mjs';
 import { scanShortSignals } from './scan-short-signal.mjs';
+import { scanMomentumLong } from './scan-momentum.mjs';
 import { recordWhaleSnapshot, getWhaleHistory, registerActiveSymbol, startWhaleCollector } from './whale-history.mjs';
+import { MAX_MARKET_CAP_USD, isEligibleMarketCap, formatMaxMarketCapLabel } from './market-cap-filter.mjs';
+import {
+  initStrategyReview, savePredictionSnapshot, runStrategyReview,
+  getStrategyReviews, getLatestPredictions, startStrategyReviewScheduler,
+} from './strategy-review.mjs';
+import {
+  scanPumpSmartAlerts, buildPumpSmartAlertElements, buildPumpGainerAlertElements,
+  PUMP_SMART_MIN_CHANGE, PUMP_SMART_INTERVAL_MIN, PUMP_SMART_SCAN_LIMIT, REALTIME_ALERT_INTERVAL_MIN,
+} from './pump-smart-alert.mjs';
 
-const execFileAsync = promisify(execFile);
 const FETCH_TIMEOUT_MS = 15000;
 
 // Load .env file
@@ -41,40 +48,30 @@ const MIME = {
   '.json': 'application/json; charset=utf-8',
 };
 
-async function fetchJsonViaCurl(url) {
-  const args = ['-s', '--max-time', '15'];
-  if (process.env.HTTPS_PROXY) args.push('--proxy', process.env.HTTPS_PROXY);
-  args.push(url);
-  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024 });
-  return JSON.parse(stdout.trim());
-}
-
 async function proxyBinance(path, { retries = 3 } = {}) {
   const url = `${FAPI_BASE}${path}`;
   let lastErr;
   for (let attempt = 1; attempt <= retries; attempt++) {
     try {
-      const res = await fetch(url, { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) });
-      if (res.ok) return res.json();
-      const body = await res.text();
-      if (res.status === 451) {
-        throw new Error('币安 API 地区限制 (451)，请确认代理节点可访问合约 API');
+      const data = await fetchJson(url, { timeoutMs: FETCH_TIMEOUT_MS, preferCurl: true });
+      if (data?.code === 0 && data?.msg && !Array.isArray(data)) {
+        throw new Error(`币安 API: ${data.msg.slice(0, 100)}`);
       }
-      throw new Error(`Binance API ${res.status}: ${body.slice(0, 120) || path}`);
+      return data;
     } catch (e) {
       lastErr = e;
-      try {
-        return await fetchJsonViaCurl(url);
-      } catch (curlErr) {
-        lastErr = curlErr;
-        if (attempt < retries) {
-          await new Promise(r => setTimeout(r, 800 * attempt));
-          continue;
-        }
+      if (attempt < retries) {
+        await new Promise(r => setTimeout(r, 800 * attempt));
       }
     }
   }
   throw lastErr;
+}
+
+function assertTickerArray(tickers, label = 'ticker/24hr') {
+  if (Array.isArray(tickers)) return tickers;
+  const msg = tickers?.msg || tickers?.message || JSON.stringify(tickers).slice(0, 120);
+  throw new Error(`币安 ${label} 数据异常: ${msg}（请检查代理节点）`);
 }
 
 async function waitForNetworkReady(label = '币安 API', {
@@ -154,7 +151,7 @@ async function load8amBaselinePrices(symbols) {
 }
 
 async function handleGainersSince8am(limit) {
-  const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
+  const tickers = assertTickerArray(await proxyBinance('/fapi/v1/ticker/24hr'));
   const usdt = tickers.filter(t => t.symbol.endsWith('USDT'));
   const symbols = usdt.map(t => t.symbol);
   const { dateKey, openTime, prices: baselines } = await load8amBaselinePrices(symbols);
@@ -166,6 +163,7 @@ async function handleGainersSince8am(limit) {
       const change = ((price - basePrice) / basePrice) * 100;
       return {
         symbol: t.symbol,
+        label: t.symbol.replace(/USDT$/, ''),
         price,
         basePrice,
         volume: parseFloat(t.quoteVolume),
@@ -175,10 +173,64 @@ async function handleGainersSince8am(limit) {
     })
     .sort((a, b) => b.change - a.change)
     .slice(0, limit);
+  const filteredItems = await filterItemsByMarketCap(items, 'symbol');
   const { label } = getBaseline8amInfo();
   return {
     meta: { baselineDate: dateKey, baselineTime: '08:00', timezone: 'Asia/Shanghai', baselineLabel: label, openTime },
-    items,
+    items: filteredItems,
+  };
+}
+
+async function handleLosersSince8am(limit) {
+  const tickers = assertTickerArray(await proxyBinance('/fapi/v1/ticker/24hr'));
+  const usdt = tickers.filter(t => t.symbol.endsWith('USDT'));
+  const symbols = usdt.map(t => t.symbol);
+  const { dateKey, openTime, prices: baselines } = await load8amBaselinePrices(symbols);
+  const items = usdt
+    .filter(t => baselines[t.symbol] > 0)
+    .map(t => {
+      const price = parseFloat(t.lastPrice);
+      const basePrice = baselines[t.symbol];
+      const change = ((price - basePrice) / basePrice) * 100;
+      return {
+        symbol: t.symbol,
+        label: t.symbol.replace(/USDT$/, ''),
+        price,
+        basePrice,
+        volume: parseFloat(t.quoteVolume),
+        change,
+        change24h: parseFloat(t.priceChangePercent),
+      };
+    })
+    .sort((a, b) => a.change - b.change)
+    .slice(0, limit);
+  const filteredItems = await filterItemsByMarketCap(items, 'symbol');
+  const { label } = getBaseline8amInfo();
+  return {
+    meta: { baselineDate: dateKey, baselineTime: '08:00', timezone: 'Asia/Shanghai', baselineLabel: label, openTime },
+    items: filteredItems,
+  };
+}
+
+async function fetchCurrentPrices(symbols) {
+  if (!symbols.length) return {};
+  const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
+  const map = {};
+  for (const t of tickers) {
+    if (symbols.includes(t.symbol)) map[t.symbol] = parseFloat(t.lastPrice);
+  }
+  return map;
+}
+
+async function build8amChangeMaps() {
+  const [gainers, losers] = await Promise.all([
+    handleGainersSince8am(50),
+    handleLosersSince8am(50),
+  ]);
+  return {
+    gainMap: Object.fromEntries(gainers.items.map(i => [i.symbol, i.change])),
+    declineMap: Object.fromEntries(losers.items.map(i => [i.symbol, i.change])),
+    gainerItems: gainers.items,
   };
 }
 
@@ -207,6 +259,30 @@ async function getChangeSince8am(symbol, currentPrice) {
     basePrice,
     baselineLabel: label,
   };
+}
+
+async function filterItemsByMarketCap(items, symbolKey = 'symbol') {
+  if (!MAX_MARKET_CAP_USD || MAX_MARKET_CAP_USD <= 0 || !items.length) return items;
+  const symbols = [...new Set(items.map((i) => i[symbolKey]))];
+  const marketCaps = await batchFetchMarketCaps(symbols);
+  const filtered = items.filter((item) => isEligibleMarketCap(marketCaps[item[symbolKey]] || 0));
+  const removed = items.length - filtered.length;
+  if (removed > 0) {
+    console.log(`  [市值过滤] 排除 ${removed} 个大市值币种 (>${formatMaxMarketCapLabel()})`);
+  }
+  return filtered;
+}
+
+async function rejectIfMarketCapTooLarge(symbol, res) {
+  if (!MAX_MARKET_CAP_USD || MAX_MARKET_CAP_USD <= 0) return false;
+  const mc = await fetchMcForSymbol(symbol);
+  if (mc > 0 && !isEligibleMarketCap(mc)) {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    res.writeHead(403, headers);
+    res.end(JSON.stringify({ error: `该币种市值超过 ${formatMaxMarketCapLabel()}，不在监控范围`, market_cap: mc }));
+    return true;
+  }
+  return false;
 }
 
 async function handleAPI(symbol, { ratioLimit = 72, oiLimit = 42, takerLimit = 48 } = {}) {
@@ -250,10 +326,24 @@ const DUMP_PUSH_HOURS = parseFloat(process.env.DUMP_PUSH_HOURS || '1');
 const DUMP_PUSH_ENABLED = process.env.DUMP_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const DUMP_SCAN_LIMIT = parseInt(process.env.DUMP_SCAN_LIMIT || '200', 10);
 const DUMP_MIN_RISK = parseInt(process.env.DUMP_MIN_RISK || '4', 10);
-const LONG_PUSH_HOURS = parseFloat(process.env.LONG_PUSH_HOURS || '1');
+const LONG_PUSH_HOURS = parseFloat(process.env.LONG_PUSH_HOURS || process.env.COMBINED_PUSH_HOURS || '4', 10);
+const COMBINED_PUSH_HOURS = parseFloat(process.env.COMBINED_PUSH_HOURS || process.env.STABLE_PUSH_HOURS || '4', 10);
+const DUMP_ALERT_INTERVAL_MIN = parseInt(process.env.DUMP_ALERT_INTERVAL_MIN || '15', 10);
 const LONG_PUSH_ENABLED = process.env.LONG_PUSH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const LONG_SCAN_LIMIT = parseInt(process.env.LONG_SCAN_LIMIT || '200', 10);
 const LONG_MIN_SCORE = parseInt(process.env.LONG_MIN_SCORE || '3', 10);
+const PUMP_SMART_ENABLED = process.env.PUMP_SMART_ALERT_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+
+const PUMP_GAINER_ENABLED = process.env.PUMP_GAINER_ALERT_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+
+let pumpSmartRunning = false;
+let dumpAlertRunning = false;
+let pumpGainerRunning = false;
+let realtimeAlertRunning = false;
+/** @type {Map<string, { since: number, count: number }>} */
+const pumpSmartActive = new Map();
+const pumpGainerActive = new Map();
+const dumpAlertActive = new Map();
 
 async function sendFeishu(title, content) {
   if (!FEISHU_WEBHOOK) throw new Error('FEISHU_WEBHOOK 未配置');
@@ -318,13 +408,18 @@ async function runStableTrendPush() {
   try {
     console.log(`\n  📤 开始稳趋势扫描推送...`);
     await waitForNetworkReady('币安 API', { maxAttempts: 6, initialDelayMs: 10000 });
-    const results = await scanRightStable({
+    const results = await filterItemsByMarketCap(await scanRightStable({
       limit: STABLE_SCAN_LIMIT,
       maxDrawdownPct: STABLE_MAX_DRAWDOWN,
       dualTFConfirm: true,
       filterTF: '1h',
       concurrency: 3,
-    });
+    }));
+
+    if (!results.length) {
+      console.log(`  ✓ 稳趋势扫描完成，无符合市值条件的币种`);
+      return;
+    }
 
     const resultSymbols = results.map(r => r.symbol);
 
@@ -413,6 +508,8 @@ async function runStableTrendPush() {
 
     await sendFeishuCardV2(`右侧稳趋势 · ${results.length} 个币种`, elements, 'turquoise');
     console.log(`  ✓ 稳趋势推送完成 (${results.length} 个币种)`);
+
+    savePredictionSnapshot({ stable: results, source: 'stable' }).catch(() => {});
   } catch (e) {
     console.warn(`  ⚠ 稳趋势推送失败: ${e.message}`);
   } finally {
@@ -470,11 +567,10 @@ function fmtMarketCap(mc) {
 
 async function refreshMcCacheCMC() {
   if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
-  const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/listings/latest?limit=500&convert=USD`, {
+  const json = await fetchJson(`${CMC_BASE}/v1/cryptocurrency/listings/latest?limit=500&convert=USD`, {
     headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+    timeoutMs: 20000,
   });
-  if (!r.ok) throw new Error(`CMC listings ${r.status}`);
-  const json = await r.json();
   const m = new Map();
   for (const c of json.data || []) {
     m.set(c.symbol.toUpperCase(), c.quote?.USD?.market_cap || 0);
@@ -488,9 +584,7 @@ async function refreshMcCacheGecko() {
   if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
   const m = new Map();
   for (let page = 1; page <= 3; page++) {
-    const r = await fetch(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false`);
-    if (!r.ok) break;
-    const data = await r.json();
+    const data = await fetchJson(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false`, { timeoutMs: 20000 });
     if (!data.length) break;
     for (const c of data) {
       if (c.market_cap > 0) m.set(c.symbol.toUpperCase(), c.market_cap);
@@ -518,14 +612,11 @@ function normSymbol(sym) {
 async function fetchMcForSymbolGecko(sym) {
   const lower = sym.replace('USDT', '').replace(/^1000/, '').toLowerCase();
   try {
-    const sr = await fetch(`https://api.coingecko.com/api/v3/search?query=${lower}`);
-    if (!sr.ok) return 0;
-    const sd = await sr.json();
+    const sr = await fetchJson(`https://api.coingecko.com/api/v3/search?query=${lower}`, { timeoutMs: 15000 });
+    const sd = sr;
     const coin = sd.coins?.find(c => c.symbol?.toLowerCase() === lower) || sd.coins?.[0];
     if (!coin) return 0;
-    const pr = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=usd&include_market_cap=true`);
-    if (!pr.ok) return 0;
-    const pd = await pr.json();
+    const pd = await fetchJson(`https://api.coingecko.com/api/v3/simple/price?ids=${coin.id}&vs_currencies=usd&include_market_cap=true`, { timeoutMs: 15000 });
     return pd[coin.id]?.usd_market_cap || 0;
   } catch { return 0; }
 }
@@ -536,16 +627,14 @@ async function fetchMcForSymbol(sym) {
   if (mcCache.data.has(upper)) return mcCache.data.get(upper);
   if (CMC_API_KEY) {
     try {
-      const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${upper}&convert=USD`, {
+      const json = await fetchJson(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${upper}&convert=USD`, {
         headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+        timeoutMs: 15000,
       });
-      if (r.ok) {
-        const json = await r.json();
-        const entry = Object.values(json.data || {})[0];
-        const arr = Array.isArray(entry) ? entry : [entry];
-        const mc = arr[0]?.quote?.USD?.market_cap || 0;
-        if (mc > 0) { mcCache.data.set(upper, mc); return mc; }
-      }
+      const entry = Object.values(json.data || {})[0];
+      const arr = Array.isArray(entry) ? entry : [entry];
+      const mc = arr[0]?.quote?.USD?.market_cap || 0;
+      if (mc > 0) { mcCache.data.set(upper, mc); return mc; }
     } catch {}
   }
   const mc = await fetchMcForSymbolGecko(sym);
@@ -572,11 +661,10 @@ async function batchFetchMarketCaps(symbols) {
     for (let i = 0; i < slugs.length; i += 100) chunks.push(slugs.slice(i, i + 100));
     for (const chunk of chunks) {
       try {
-        const r = await fetch(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${chunk.join(',')}&convert=USD`, {
+        const json = await fetchJson(`${CMC_BASE}/v1/cryptocurrency/quotes/latest?symbol=${chunk.join(',')}&convert=USD`, {
           headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
+          timeoutMs: 20000,
         });
-        if (!r.ok) continue;
-        const json = await r.json();
         for (const [, v] of Object.entries(json.data || {})) {
           const arr = Array.isArray(v) ? v : [v];
           for (const coin of arr) {
@@ -598,19 +686,81 @@ let combinedPushRunning = false;
 let longPushHistory = [];
 const COMBINED_TOP_N = 20;
 
+async function collectPredictionSnapshot() {
+  try {
+    await waitForNetworkReady('币安 API', { maxAttempts: 3, initialDelayMs: 5000 });
+    const { gainMap, declineMap, gainerItems } = await build8amChangeMaps();
+    const [longAll, shortAll, dumpAll, stableAll, momentumAll] = await Promise.all([
+      filterItemsByMarketCap(await scanRightStable({
+        limit: LONG_SCAN_LIMIT, maxDrawdownPct: 0.20, dualTFConfirm: true, filterTF: '1h', concurrency: 3,
+      })).then(r => r.filter(x => x.score >= LONG_MIN_SCORE).slice(0, COMBINED_TOP_N)).catch(() => []),
+      filterItemsByMarketCap(await scanShortSignals({
+        limit: 100, minScore: 4, concurrency: 3, declineMap, gainMap,
+      })).then(r => r.slice(0, COMBINED_TOP_N)).catch(() => []),
+      filterItemsByMarketCap(await scanDumpCoins({ limit: DUMP_SCAN_LIMIT, minRiskScore: DUMP_MIN_RISK, concurrency: 3 })).then(r => r.slice(0, COMBINED_TOP_N)).catch(() => []),
+      filterItemsByMarketCap(await scanRightStable({
+        limit: STABLE_SCAN_LIMIT, maxDrawdownPct: STABLE_MAX_DRAWDOWN, dualTFConfirm: true, filterTF: '1h', concurrency: 3,
+      })).catch(() => []),
+      filterItemsByMarketCap(await scanMomentumLong({ candidates: gainerItems, minScore: 3, concurrency: 3 })).catch(() => []),
+    ]);
+    const longMerged = mergeLongWithMomentum(longAll, momentumAll);
+    await savePredictionSnapshot({ long: longMerged, short: shortAll, dump: dumpAll, stable: stableAll, source: 'snapshot' });
+    console.log(`  📸 预测快照已保存 (多${longMerged.length} 空${shortAll.length} 暴跌${dumpAll.length} 稳${stableAll.length} 动量${momentumAll.length})`);
+  } catch (e) {
+    console.warn(`  ⚠ 预测快照采集失败: ${e.message}`);
+  }
+}
+
+function mergeLongWithMomentum(stableLong, momentum) {
+  const seen = new Set(stableLong.map(r => r.symbol));
+  const merged = [...stableLong];
+  for (const m of momentum) {
+    if (!seen.has(m.symbol)) {
+      merged.push({
+        symbol: m.symbol,
+        label: m.label,
+        score: m.score,
+        price: m.price,
+        change: m.changeSince8am,
+        changeSince8am: m.changeSince8am,
+        detail: m.detail,
+        type: 'momentum',
+      });
+      seen.add(m.symbol);
+    }
+  }
+  merged.sort((a, b) => (b.changeSince8am ?? b.change ?? 0) - (a.changeSince8am ?? a.change ?? 0));
+  return merged.slice(0, COMBINED_TOP_N);
+}
+
+function startPredictionSnapshotScheduler() {
+  if (process.env.STRATEGY_REVIEW_ENABLED === 'false') return;
+  console.log(`  📸 预测快照: 每小时整点采集（供策略复盘对比）`);
+  const scheduleNext = () => {
+    const next = getNextStablePushTime(new Date(), 1);
+    const delay = Math.max(0, next.getTime() - Date.now());
+    setTimeout(async () => {
+      await collectPredictionSnapshot();
+      scheduleNext();
+    }, delay);
+  };
+  scheduleNext();
+}
+
 async function runCombinedPush() {
   if (combinedPushRunning) return;
   const longEnabled = LONG_PUSH_ENABLED;
-  const dumpEnabled = DUMP_PUSH_ENABLED;
-  if (!longEnabled && !dumpEnabled) return;
+  if (!longEnabled) return;
   combinedPushRunning = true;
   try {
-    console.log(`\n  📤 开始做多+做空+暴跌联合扫描...`);
+    console.log(`\n  📤 开始做多+做空扫描（每 ${COMBINED_PUSH_HOURS}h）...`);
     await waitForNetworkReady('币安 API', { maxAttempts: 6, initialDelayMs: 10000 });
 
     let longResults = [];
     let shortResults = [];
-    let dumpResults = [];
+    let momentumResults = [];
+
+    const { gainMap, declineMap, gainerItems } = await build8amChangeMaps();
 
     const tasks = [];
     if (longEnabled) tasks.push((async () => {
@@ -621,7 +771,7 @@ async function runCombinedPush() {
         filterTF: '1h',
         concurrency: 3,
       });
-      const filtered = allResults.filter(r => r.score >= LONG_MIN_SCORE);
+      const filtered = (await filterItemsByMarketCap(allResults)).filter(r => r.score >= LONG_MIN_SCORE);
       const resultSymbols = filtered.map(r => r.symbol);
 
       const { prices: baselines } = await load8amBaselinePrices(resultSymbols);
@@ -657,20 +807,17 @@ async function runCombinedPush() {
 
       filtered.sort((a, b) => b.streak - a.streak || b.score - a.score || b.changeSince8am - a.changeSince8am);
       longResults = filtered.slice(0, COMBINED_TOP_N);
-    })());
 
-    if (dumpEnabled) tasks.push((async () => {
-      const results = await scanDumpCoins({
-        limit: DUMP_SCAN_LIMIT,
-        minRiskScore: DUMP_MIN_RISK,
-        concurrency: 3,
-      });
-      dumpResults = results.slice(0, COMBINED_TOP_N);
+      const momentum = await filterItemsByMarketCap(await scanMomentumLong({ candidates: gainerItems, minScore: 3, concurrency: 3 }));
+      momentumResults = momentum;
+      longResults = mergeLongWithMomentum(longResults, momentum);
     })());
 
     tasks.push((async () => {
       try {
-        const results = await scanShortSignals({ limit: 100, minScore: 4, concurrency: 3 });
+        const results = await filterItemsByMarketCap(await scanShortSignals({
+          limit: 100, minScore: 4, concurrency: 3, declineMap, gainMap,
+        }));
         shortResults = results.slice(0, COMBINED_TOP_N);
       } catch (e) {
         console.warn(`  ⚠ 做空扫描异常: ${e.message}`);
@@ -679,24 +826,16 @@ async function runCombinedPush() {
 
     await Promise.all(tasks);
 
-    if (!longResults.length && !shortResults.length && !dumpResults.length) {
-      console.log(`  ✓ 联合扫描完成，当前无做多/做空/暴跌信号`);
+    if (!longResults.length && !shortResults.length) {
+      console.log(`  ✓ 做多+做空扫描完成，当前无信号`);
       return;
     }
 
     const allSymbols = [
       ...longResults.map(r => r.symbol),
       ...shortResults.map(r => r.symbol),
-      ...dumpResults.map(r => r.symbol),
     ];
     const marketCaps = await batchFetchMarketCaps(allSymbols);
-
-    const dumpSymbols = dumpResults.map(r => r.symbol);
-    const { prices: dumpBaselines } = await load8amBaselinePrices(dumpSymbols);
-    for (const r of dumpResults) {
-      const base = dumpBaselines[r.symbol];
-      r.changeSince8am = base && base > 0 ? ((r.price - base) / base) * 100 : r.change24h;
-    }
 
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     const elements = [];
@@ -704,7 +843,8 @@ async function runCombinedPush() {
     elements.push({ tag: 'markdown', content: `**扫描时间:** ${now}` });
 
     if (longResults.length) {
-      elements.push({ tag: 'markdown', content: `**📈 做多推荐 · ${longResults.length} 个** (评分≥${LONG_MIN_SCORE}/5 · 回撤≤20%)` });
+      const momCount = momentumResults.length;
+      elements.push({ tag: 'markdown', content: `**📈 做多推荐 · ${longResults.length} 个** (评分≥${LONG_MIN_SCORE}/5 · 回撤≤20%${momCount ? ` · 含${momCount}个8点追涨` : ''})` });
       elements.push({
         tag: 'table',
         page_size: 10,
@@ -735,12 +875,12 @@ async function runCombinedPush() {
           const streakIcon = c.streak >= 5 ? '🔥' : c.streak >= 3 ? '🔄' : '·';
           const streakColor = c.streak >= 5 ? 'violet' : c.streak >= 3 ? 'blue' : 'grey';
           return {
-            coin: c.label,
+            coin: c.type === 'momentum' ? `${c.label}🚀` : c.label,
             price: `$${fmtPrice(c.price)}`,
-            chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${chg8amVal >= 0 ? '+' : ''}${chg8amVal.toFixed(1)}%</font>`,
-            chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${chg24hVal >= 0 ? '+' : ''}${chg24hVal.toFixed(1)}%</font>`,
+            chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${chg8amVal >= 0 ? '+' : ''}${(chg8amVal ?? 0).toFixed(1)}%</font>`,
+            chg24h: chg24hVal != null ? `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${chg24hVal >= 0 ? '+' : ''}${chg24hVal.toFixed(1)}%</font>` : '-',
             score: `${scoreIcon}<font color='${scoreColor}'>${c.score}/5</font>`,
-            dd: `${c.drawdown.toFixed(1)}%`,
+            dd: c.drawdown != null ? `${c.drawdown.toFixed(1)}%` : '-',
             mc: fmtMarketCap(marketCaps[c.symbol]),
             whale: c.topVsGlobal != null ? c.topVsGlobal.toFixed(2) : '-',
             streak: c.streak > 1 ? `${streakIcon}<font color='${streakColor}'>${c.streak}次</font>` : '-',
@@ -783,11 +923,66 @@ async function runCombinedPush() {
       });
     }
 
-    if (dumpResults.length) {
-      const highRisk = dumpResults.filter(r => r.riskLevel === 'high');
-      const warnRisk = dumpResults.filter(r => r.riskLevel === 'warn');
-      elements.push({ tag: 'markdown', content: `**🚨 暴跌预警 · ${highRisk.length} 高危 ${warnRisk.length} 警告**` });
-      elements.push({
+    elements.push({ tag: 'markdown', content: `_每 ${COMBINED_PUSH_HOURS}h · Top${LONG_SCAN_LIMIT} · 各取前${COMBINED_TOP_N}_` });
+
+    const titleParts = [];
+    if (longResults.length) titleParts.push(`📈${longResults.length}做多`);
+    if (shortResults.length) titleParts.push(`📉${shortResults.length}做空`);
+    const title = `${COMBINED_PUSH_HOURS}h扫描 · ${titleParts.join(' · ')}`;
+
+    await sendFeishuCardV2(title, elements);
+    console.log(`  ✓ 做多+做空推送完成 (做多 ${longResults.length} + 做空 ${shortResults.length})`);
+
+    savePredictionSnapshot({ long: longResults, short: shortResults, source: 'combined' }).catch(() => {});
+  } catch (e) {
+    console.warn(`  ⚠ 联合推送失败: ${e.message}`);
+  } finally {
+    combinedPushRunning = false;
+  }
+}
+
+async function runDumpAlertPush() {
+  if (!DUMP_PUSH_ENABLED || dumpAlertRunning) return;
+  dumpAlertRunning = true;
+  try {
+    await waitForNetworkReady('币安 API', { maxAttempts: 3, initialDelayMs: 5000 });
+    const dumpResults = (await filterItemsByMarketCap(await scanDumpCoins({
+      limit: DUMP_SCAN_LIMIT,
+      minRiskScore: DUMP_MIN_RISK,
+      concurrency: 3,
+    }))).slice(0, COMBINED_TOP_N);
+
+    const activeSymbols = new Set(dumpResults.map(r => r.symbol));
+    for (const sym of [...dumpAlertActive.keys()]) {
+      if (!activeSymbols.has(sym)) dumpAlertActive.delete(sym);
+    }
+    if (!dumpResults.length) {
+      console.log(`  ✓ 暴跌实时扫描: 无触发 (风险≥${DUMP_MIN_RISK})`);
+      return;
+    }
+
+    const dumpSymbols = dumpResults.map(r => r.symbol);
+    const { prices: dumpBaselines } = await load8amBaselinePrices(dumpSymbols);
+    for (const r of dumpResults) {
+      const base = dumpBaselines[r.symbol];
+      r.changeSince8am = base && base > 0 ? ((r.price - base) / base) * 100 : r.change24h;
+    }
+
+    const marketCaps = await batchFetchMarketCaps(dumpSymbols);
+    const pushCounts = {};
+    for (const r of dumpResults) {
+      const prev = dumpAlertActive.get(r.symbol);
+      pushCounts[r.symbol] = prev ? prev.count + 1 : 1;
+      dumpAlertActive.set(r.symbol, { since: prev?.since ?? Date.now(), count: pushCounts[r.symbol] });
+    }
+
+    const highRisk = dumpResults.filter(r => r.riskLevel === 'high');
+    const warnRisk = dumpResults.filter(r => r.riskLevel === 'warn');
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    const elements = [
+      { tag: 'markdown', content: `**⏰ ${now}**\n**实时暴跌预警** · 每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟 · 风险≥${DUMP_MIN_RISK}` },
+      { tag: 'markdown', content: `**🚨 ${highRisk.length} 高危 · ⚠️ ${warnRisk.length} 警告**` },
+      {
         tag: 'table',
         page_size: 10,
         row_height: 'low',
@@ -803,55 +998,161 @@ async function runCombinedPush() {
         ],
         rows: [...highRisk, ...warnRisk].map(r => {
           const chg8amColor = r.changeSince8am >= 0 ? 'turquoise' : r.changeSince8am <= -10 ? 'red' : 'orange';
-          const chg8amIcon = r.changeSince8am <= -10 ? '💀' : '';
-          const chg8amArrow = r.changeSince8am <= -10 ? '' : r.changeSince8am >= 0 ? '▲' : '▼';
           const chg24hColor = r.change24h >= 0 ? 'turquoise' : r.change24h <= -10 ? 'red' : 'orange';
-          const chg24hIcon = r.change24h <= -10 ? '💀' : '';
-          const chg24hArrow = r.change24h <= -10 ? '' : r.change24h >= 0 ? '▲' : '▼';
           const riskColor = r.riskLevel === 'high' ? 'red' : 'orange';
-          const riskIcon = r.riskLevel === 'high' ? '🚨' : '⚠️';
           return {
             coin: r.label,
             price: `$${fmtPrice(r.price)}`,
-            chg8am: `${chg8amIcon}<font color='${chg8amColor}'>${chg8amArrow}${r.changeSince8am >= 0 ? '+' : ''}${r.changeSince8am.toFixed(1)}%</font>`,
-            chg24h: `${chg24hIcon}<font color='${chg24hColor}'>${chg24hArrow}${r.change24h >= 0 ? '+' : ''}${r.change24h.toFixed(1)}%</font>`,
-            risk: `${riskIcon}<font color='${riskColor}'>${r.riskScore}</font>`,
+            chg8am: `<font color='${chg8amColor}'>${r.changeSince8am >= 0 ? '+' : ''}${r.changeSince8am.toFixed(1)}%</font>`,
+            chg24h: `<font color='${chg24hColor}'>${r.change24h >= 0 ? '+' : ''}${r.change24h.toFixed(1)}%</font>`,
+            risk: `<font color='${riskColor}'>${r.riskScore}</font>`,
             mc: fmtMarketCap(marketCaps[r.symbol]),
             tags: r.risks.slice(0, 3).map(x => `${x.level}${x.tag}`).join(' '),
           };
         }),
-      });
-    }
+      },
+    ];
 
-    elements.push({ tag: 'markdown', content: `_每小时整点 · Top${LONG_SCAN_LIMIT} · 各取前${COMBINED_TOP_N}_` });
-
-    const titleParts = [];
-    if (longResults.length) titleParts.push(`📈${longResults.length}做多`);
-    if (shortResults.length) titleParts.push(`📉${shortResults.length}做空`);
-    if (dumpResults.length) titleParts.push(`🚨${dumpResults.length}预警`);
-    const title = `整点扫描 · ${titleParts.join(' · ')}`;
-
-    await sendFeishuCardV2(title, elements);
-    console.log(`  ✓ 联合推送完成 (做多 ${longResults.length} + 做空 ${shortResults.length} + 暴跌 ${dumpResults.length})`);
+    const title = `🚨 暴跌预警 · ${dumpResults.length} 个${pushCounts[dumpResults[0]?.symbol] > 1 ? ' (持续)' : ''}`;
+    await sendFeishuCardV2(title, elements, 'red');
+    console.log(`  ✓ 暴跌实时推送 (${dumpResults.length} 个: ${dumpResults.map(r => r.label).join(', ')})`);
+    savePredictionSnapshot({ dump: dumpResults, source: 'dump-realtime' }).catch(() => {});
   } catch (e) {
-    console.warn(`  ⚠ 联合推送失败: ${e.message}`);
+    console.warn(`  ⚠ 暴跌实时推送失败: ${e.message}`);
   } finally {
-    combinedPushRunning = false;
+    dumpAlertRunning = false;
   }
 }
 
-function startCombinedPushScheduler() {
-  if (!LONG_PUSH_ENABLED && !DUMP_PUSH_ENABLED) {
-    console.log(`  ⏸ 做多+暴跌推送均未启用（需配置 FEISHU_WEBHOOK）`);
+async function runPumpGainerAlertPush() {
+  if (!PUMP_GAINER_ENABLED || pumpGainerRunning) return;
+  pumpGainerRunning = true;
+  try {
+    await waitForNetworkReady('币安 API', { maxAttempts: 3, initialDelayMs: 5000 });
+    const { items } = await handleGainersSince8am(PUMP_SMART_SCAN_LIMIT);
+    const gainers = items.filter(i => i.change >= PUMP_SMART_MIN_CHANGE);
+    if (!gainers.length) {
+      console.log(`  ✓ 暴涨实时扫描: 无 ≥${PUMP_SMART_MIN_CHANGE}%`);
+      for (const sym of [...pumpGainerActive.keys()]) pumpGainerActive.delete(sym);
+      return;
+    }
+
+    const activeSymbols = new Set(gainers.map(g => g.symbol));
+    for (const sym of [...pumpGainerActive.keys()]) {
+      if (!activeSymbols.has(sym)) pumpGainerActive.delete(sym);
+    }
+
+    const pushCounts = {};
+    for (const g of gainers) {
+      const prev = pumpGainerActive.get(g.symbol);
+      pushCounts[g.symbol] = prev ? prev.count + 1 : 1;
+      pumpGainerActive.set(g.symbol, { since: prev?.since ?? Date.now(), count: pushCounts[g.symbol] });
+    }
+
+    const elements = buildPumpGainerAlertElements(gainers, { fmtPrice, pushCounts, minChange: PUMP_SMART_MIN_CHANGE });
+    const top = gainers[0];
+    const title = gainers.length === 1
+      ? `🚀 暴涨提醒 · ${top.label} +${top.change.toFixed(0)}%`
+      : `🚀 暴涨提醒 · ${gainers.slice(0, 3).map(g => g.label).join('/')} 等${gainers.length}个`;
+
+    await sendFeishuCardV2(title, elements, 'orange');
+    console.log(`  ✓ 暴涨实时推送 (${gainers.length} 个: ${gainers.slice(0, 5).map(g => g.label).join(', ')})`);
+  } catch (e) {
+    console.warn(`  ⚠ 暴涨实时推送失败: ${e.message}`);
+  } finally {
+    pumpGainerRunning = false;
+  }
+}
+
+async function runRealtimeAlerts() {
+  if (realtimeAlertRunning) return;
+  realtimeAlertRunning = true;
+  try {
+    await Promise.all([
+      PUMP_GAINER_ENABLED ? runPumpGainerAlertPush() : Promise.resolve(),
+      PUMP_SMART_ENABLED ? runPumpSmartAlertPush() : Promise.resolve(),
+      DUMP_PUSH_ENABLED ? runDumpAlertPush() : Promise.resolve(),
+    ]);
+  } finally {
+    realtimeAlertRunning = false;
+  }
+}
+
+async function runPumpSmartAlertPush() {
+  if (!PUMP_SMART_ENABLED || pumpSmartRunning) return;
+  pumpSmartRunning = true;
+  try {
+    await waitForNetworkReady('币安 API', { maxAttempts: 3, initialDelayMs: 5000 });
+    const { items } = await handleGainersSince8am(PUMP_SMART_SCAN_LIMIT);
+    const alerts = await scanPumpSmartAlerts({
+      candidates: items,
+      proxyBinance,
+      minChange: PUMP_SMART_MIN_CHANGE,
+      concurrency: 3,
+    });
+
+    const activeSymbols = new Set(alerts.map(a => a.symbol));
+    for (const sym of [...pumpSmartActive.keys()]) {
+      if (!activeSymbols.has(sym)) pumpSmartActive.delete(sym);
+    }
+
+    if (!alerts.length) {
+      console.log(`  ✓ 暴涨+聪明钱扫描: 无触发 (阈值≥${PUMP_SMART_MIN_CHANGE}%)`);
+      return;
+    }
+
+    const pushCounts = {};
+    for (const a of alerts) {
+      const prev = pumpSmartActive.get(a.symbol);
+      const count = prev ? prev.count + 1 : 1;
+      pumpSmartActive.set(a.symbol, { since: prev?.since ?? Date.now(), count });
+      pushCounts[a.symbol] = count;
+    }
+
+    const elements = buildPumpSmartAlertElements(alerts, { fmtPrice, pushCounts });
+    const labels = alerts.slice(0, 3).map(a => a.label).join('/');
+    const title = alerts.length === 1
+      ? `🚀 暴涨+聪明钱加仓 · ${alerts[0].label}${pushCounts[alerts[0].symbol] > 1 ? ` (第${pushCounts[alerts[0].symbol]}次)` : ''}`
+      : `🚀 暴涨+聪明钱加仓 · ${labels}${alerts.length > 3 ? '…' : ''}`;
+
+    await sendFeishuCardV2(title, elements, 'orange');
+    console.log(`  ✓ 暴涨+聪明钱推送 (${alerts.length} 个: ${alerts.map(a => a.label).join(', ')})`);
+  } catch (e) {
+    console.warn(`  ⚠ 暴涨+聪明钱推送失败: ${e.message}`);
+  } finally {
+    pumpSmartRunning = false;
+  }
+}
+
+function startRealtimeAlertScheduler() {
+  const anyEnabled = PUMP_GAINER_ENABLED || PUMP_SMART_ENABLED || DUMP_PUSH_ENABLED;
+  if (!anyEnabled) {
+    console.log(`  ⏸ 暴涨/暴跌实时推送均未启用`);
     return;
   }
-  console.log(`  🔔 做多+暴跌联合推送: 上海时间每小时整点 → 飞书`);
+  const ms = REALTIME_ALERT_INTERVAL_MIN * 60 * 1000;
+  const parts = [];
+  if (PUMP_GAINER_ENABLED) parts.push('暴涨');
+  if (PUMP_SMART_ENABLED) parts.push('暴涨+聪明钱');
+  if (DUMP_PUSH_ENABLED) parts.push('暴跌');
+  console.log(`  ⚡ 实时推送: 每 ${REALTIME_ALERT_INTERVAL_MIN} 分钟 · ${parts.join(' / ')} → 飞书`);
+  setInterval(() => runRealtimeAlerts(), ms);
+  setTimeout(() => runRealtimeAlerts(), 60_000);
+}
+
+function startCombinedPushScheduler() {
+  if (!LONG_PUSH_ENABLED) {
+    console.log(`  ⏸ 做多+做空推送未启用（需配置 FEISHU_WEBHOOK）`);
+    return;
+  }
+  const slots = getStablePushHours(COMBINED_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:00`).join(' / ');
+  console.log(`  🔔 做多+做空推送: 上海时间 ${slots}（每 ${COMBINED_PUSH_HOURS}h）→ 飞书`);
 
   const scheduleNext = () => {
-    const next = getNextStablePushTime(new Date(), 1);
+    const next = getNextStablePushTime(new Date(), COMBINED_PUSH_HOURS);
     const delay = Math.max(0, next.getTime() - Date.now());
     const label = next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-    console.log(`  ⏭ 联合推送下次: ${label}（${Math.round(delay / 60000)} 分钟后）`);
+    console.log(`  ⏭ 做多+做空下次: ${label}（${Math.round(delay / 60000)} 分钟后）`);
     setTimeout(async () => {
       await runCombinedPush();
       scheduleNext();
@@ -923,6 +1224,7 @@ const server = createServer(async (req, res) => {
       usdt = usdt
         .sort((a, b) => sort === 'change' ? b.change - a.change : b.volume - a.volume)
         .slice(0, limit);
+      usdt = await filterItemsByMarketCap(usdt, 'symbol');
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(usdt));
     } catch (e) {
@@ -942,6 +1244,68 @@ const server = createServer(async (req, res) => {
       res.writeHead(500, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  if (url.pathname === '/api/losers-since-8am') {
+    const limit = Math.min(500, parseInt(url.searchParams.get('limit') || '200', 10));
+    try {
+      const data = await handleLosersSince8am(limit);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/strategy-review') {
+    const hours = parseInt(url.searchParams.get('hours') || '48', 10);
+    try {
+      const data = await getStrategyReviews(hours);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/strategy-predictions') {
+    const hours = parseInt(url.searchParams.get('hours') || '24', 10);
+    try {
+      const data = await getLatestPredictions(hours);
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-strategy-review' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发策略复盘' }));
+    runStrategyReview().catch(e => console.warn(`  ⚠ 手动复盘失败: ${e.message}`));
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-strategy-review' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
+  if (url.pathname === '/api/config') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify({
+      maxMarketCapUsd: MAX_MARKET_CAP_USD,
+      maxMarketCapLabel: formatMaxMarketCapLabel(),
+    }));
     return;
   }
 
@@ -976,6 +1340,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/data') {
     const symbol = url.searchParams.get('symbol') || 'SLXUSDT';
+    if (await rejectIfMarketCapTooLarge(symbol, res)) return;
     registerActiveSymbol(symbol);
     const ratioLimit = url.searchParams.get('ratioLimit') || 72;
     const oiLimit = url.searchParams.get('oiLimit') || 42;
@@ -993,6 +1358,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/smart-signal') {
     const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
+    if (await rejectIfMarketCapTooLarge(symbol, res)) return;
     const priceParam = parseFloat(url.searchParams.get('price') || '0');
     const price = priceParam > 0 ? priceParam : null;
     try {
@@ -1045,13 +1411,57 @@ const server = createServer(async (req, res) => {
     const limit = Math.min(300, parseInt(url.searchParams.get('limit') || '200', 10));
     const minRisk = parseInt(url.searchParams.get('minRisk') || '4', 10);
     try {
-      const results = await scanDumpCoins({ limit, minRiskScore: minRisk, concurrency: 3 });
+      const results = await filterItemsByMarketCap(await scanDumpCoins({ limit, minRiskScore: minRisk, concurrency: 3 }));
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(results));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ error: e.message }));
     }
+    return;
+  }
+
+  if (url.pathname === '/api/scan-pump-smart') {
+    const limit = Math.min(50, parseInt(url.searchParams.get('limit') || String(PUMP_SMART_SCAN_LIMIT), 10));
+    const minChange = parseFloat(url.searchParams.get('minChange') || String(PUMP_SMART_MIN_CHANGE));
+    try {
+      const { items } = await handleGainersSince8am(limit);
+      const results = await scanPumpSmartAlerts({
+        candidates: items,
+        proxyBinance,
+        minChange,
+        concurrency: 3,
+      });
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(results));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-pump-smart-push' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (pumpSmartRunning) {
+      res.writeHead(409, headers);
+      res.end(JSON.stringify({ ok: false, error: '推送正在进行中' }));
+      return;
+    }
+    if (!FEISHU_WEBHOOK) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'FEISHU_WEBHOOK 未配置' }));
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发暴涨+聪明钱推送' }));
+    runPumpSmartAlertPush().catch(() => {});
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-pump-smart-push' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
     return;
   }
 
@@ -1079,12 +1489,32 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/scan-momentum') {
+    const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '30', 10));
+    const minScore = parseInt(url.searchParams.get('minScore') || '3', 10);
+    try {
+      const { gainerItems } = await build8amChangeMaps();
+      const results = await filterItemsByMarketCap(await scanMomentumLong({
+        candidates: gainerItems.slice(0, limit * 2),
+        minScore,
+        concurrency: 3,
+      }));
+      const { label } = getBaseline8amInfo();
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ meta: { baselineLabel: label }, items: results }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
   if (url.pathname === '/api/scan-smart-signal') {
     const limit = Math.min(200, parseInt(url.searchParams.get('limit') || '100', 10));
     const direction = ['long', 'short', 'all'].includes(url.searchParams.get('direction'))
       ? url.searchParams.get('direction') : 'long';
     try {
-      const results = await scanSmartSignal({ limit, direction, concurrency: 2 });
+      const results = await filterItemsByMarketCap(await scanSmartSignal({ limit, direction, concurrency: 2 }));
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(results));
     } catch (e) {
@@ -1114,18 +1544,37 @@ server.listen(PORT, () => {
     console.log(`  ⚠ 未配置 HTTPS_PROXY，Smart Signal 若超时请在 .env 中设置代理`);
   }
   console.log(`  📊 默认监控: SLXUSDT`);
+  if (MAX_MARKET_CAP_USD > 0) {
+    console.log(`  💰 市值过滤: 仅监控 ≤ ${formatMaxMarketCapLabel()}`);
+  }
   console.log(`  ⏹  Ctrl+C 退出\n`);
   // 预热8点基准价缓存，避免首次打开涨幅榜等待过久（开机时等待网络就绪）
   waitForNetworkReady('币安 API')
     .then(() => handleGainersSince8am(10))
     .then(() => {
       console.log(`  ✓ 8点涨幅基准价缓存已预热`);
+      if (process.env.STRATEGY_REVIEW_ENABLED !== 'false') {
+        return collectPredictionSnapshot();
+      }
     })
     .catch(e => {
       console.warn(`  ⚠ 8点基准价预热失败: ${e.message}`);
     });
+  initStrategyReview({
+    getGainersSince8am: handleGainersSince8am,
+    getLosersSince8am: handleLosersSince8am,
+    getPrices: fetchCurrentPrices,
+    sendFeishuCard: sendFeishuCardV2,
+    getNextReviewTime: getNextStablePushTime,
+    fmtPrice,
+    feishuEnabled: !!FEISHU_WEBHOOK,
+  });
+
   startStablePushScheduler();
   startCombinedPushScheduler();
+  startRealtimeAlertScheduler();
+  startPredictionSnapshotScheduler();
+  startStrategyReviewScheduler();
   startWhaleCollector().catch(e => {
     console.warn(`  ⚠ 鲸鱼历史采集启动失败: ${e.message}`);
   });

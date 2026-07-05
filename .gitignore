@@ -1,3 +1,4 @@
 node_modules/
 .env
 data/whale-history.json
+logs/

@@ -1,10 +1,8 @@
-const FAPI_BASE = 'https://fapi.binance.com';
+import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
 
-async function fetchJSON(url) {
-  const res = await fetch(url);
-  if (!res.ok) throw new Error(`${res.status} ${url}`);
-  return res.json();
-}
+setupProxyFromEnv();
+
+const FAPI_BASE = 'https://fapi.binance.com';
 
 function calcRSI(closes, period = 14) {
   if (closes.length < period + 1) return 50;
@@ -27,7 +25,7 @@ function calcRSI(closes, period = 14) {
  * 检查单个币种的做空信号。
  * 返回 { symbol, label, shortScore, signals, ... } 或 null
  */
-export async function checkShortSignal(symbol) {
+export async function checkShortSignal(symbol, { changeSince8am = null } = {}) {
   const [klines1h, klines4h] = await Promise.all([
     fetchJSON(`${FAPI_BASE}/fapi/v1/klines?symbol=${symbol}&interval=1h&limit=48`),
     fetchJSON(`${FAPI_BASE}/fapi/v1/klines?symbol=${symbol}&interval=4h&limit=30`),
@@ -55,6 +53,14 @@ export async function checkShortSignal(symbol) {
   const chg24h = (curPrice - price24hAgo) / price24hAgo * 100;
   const peak24h = Math.max(...highs1h.slice(-24));
   const ddFromPeak = (peak24h - curPrice) / peak24h * 100;
+
+  // 续涨模式：暴涨但几乎没回撤、近4根多阳线 → 不宜做空（LAB/TAC 类型）
+  const recent4 = klines1h.slice(-4);
+  const greenCount = recent4.filter(k => parseFloat(k[4]) > parseFloat(k[1])).length;
+  if (chg24h > 80 && ddFromPeak < 15) return null;
+  if (chg24h > 50 && ddFromPeak < 8 && greenCount >= 3) return null;
+  if (changeSince8am != null && changeSince8am > 30 && ddFromPeak < 10 && greenCount >= 2) return null;
+  if (changeSince8am != null && changeSince8am > 12 && ddFromPeak < 15) return null;
 
   if (chg24h > 100 && ddFromPeak > 10) {
     shortScore += 4;
@@ -169,6 +175,18 @@ export async function checkShortSignal(symbol) {
     }
   }
 
+  // ⑧ 8点来大跌（AKE 类型 — 8am基准跌幅大）
+  if (changeSince8am != null && changeSince8am < -20) {
+    shortScore += 4;
+    signals.push({ tag: '8点大跌', detail: `8am来${changeSince8am.toFixed(1)}%`, score: 4 });
+  } else if (changeSince8am != null && changeSince8am < -12) {
+    shortScore += 3;
+    signals.push({ tag: '8点下跌', detail: `8am来${changeSince8am.toFixed(1)}%`, score: 3 });
+  } else if (changeSince8am != null && changeSince8am < -8) {
+    shortScore += 2;
+    signals.push({ tag: '8点走弱', detail: `8am来${changeSince8am.toFixed(1)}%`, score: 2 });
+  }
+
   if (shortScore < 4) return null;
 
   return {
@@ -202,25 +220,50 @@ export async function scanShortSignals({
   limit = 200,
   minScore = 4,
   concurrency = 3,
+  declineMap = {},
+  gainMap = {},
 } = {}) {
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
 
-  const candidates = tickers
-    .filter(t => t.symbol.endsWith('USDT'))
-    .map(t => ({
-      symbol: t.symbol,
-      change: parseFloat(t.priceChangePercent),
-      volume: parseFloat(t.quoteVolume),
-      price: parseFloat(t.lastPrice),
-    }))
-    .filter(t => t.change > 20 || t.change < -15 || t.volume > 50_000_000)
-    .sort((a, b) => Math.abs(b.change) - Math.abs(a.change))
-    .slice(0, limit);
+  const seen = new Set();
+  const candidates = [];
+
+  for (const t of tickers.filter(t => t.symbol.endsWith('USDT'))) {
+    const change = parseFloat(t.priceChangePercent);
+    const volume = parseFloat(t.quoteVolume);
+    if (change > 20 || change < -15 || volume > 50_000_000) {
+      candidates.push({
+        symbol: t.symbol,
+        change,
+        volume,
+        price: parseFloat(t.lastPrice),
+        changeSince8am: gainMap[t.symbol] ?? declineMap[t.symbol] ?? null,
+      });
+      seen.add(t.symbol);
+    }
+  }
+
+  for (const [sym, chg] of Object.entries(declineMap)) {
+    if (chg < -8 && !seen.has(sym)) {
+      const t = tickers.find(x => x.symbol === sym);
+      candidates.push({
+        symbol: sym,
+        change: t ? parseFloat(t.priceChangePercent) : chg,
+        volume: t ? parseFloat(t.quoteVolume) : 0,
+        price: t ? parseFloat(t.lastPrice) : 0,
+        changeSince8am: chg,
+      });
+      seen.add(sym);
+    }
+  }
+
+  candidates.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
+  const toScan = candidates.slice(0, limit);
 
   const results = [];
-  await pmap(candidates, async (item) => {
+  await pmap(toScan, async (item) => {
     try {
-      const r = await checkShortSignal(item.symbol);
+      const r = await checkShortSignal(item.symbol, { changeSince8am: item.changeSince8am });
       if (r && r.shortScore >= minScore) {
         results.push(r);
       }
