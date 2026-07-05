@@ -36,7 +36,7 @@ function resolveAction(health, pnlPct, direction, currentPrice, stopLoss, takePr
   if (stopLoss && direction === 'short' && currentPrice >= stopLoss) return 'stop_loss';
   if (health === 'warning' && pnlPct >= 5) return 'take_profit';
   if (health === 'warning' && pnlPct > 0) return 'tighten_sl';
-  if (health === 'warning' && pnlPct < -3) return 'stop_loss';
+  if (health === 'warning' && pnlPct < -5) return 'stop_loss';
   return 'hold';
 }
 
@@ -161,8 +161,8 @@ export async function evaluatePositionHealth({
 
   healthScore = Math.max(0, Math.min(100, healthScore));
   let health = 'healthy';
-  if (healthScore < 45 || !signalValid) health = 'critical';
-  else if (healthScore < 65) health = 'warning';
+  if (healthScore < 45 || (healthScore < 55 && !signalValid)) health = 'critical';
+  else if (healthScore < 65 || !signalValid) health = 'warning';
 
   const action = resolveAction(health, pnlPct, dir, currentPrice, effectiveSL, effectiveTP);
 

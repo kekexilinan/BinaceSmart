@@ -339,7 +339,8 @@ const PUMP_SMART_ENABLED = process.env.PUMP_SMART_ALERT_ENABLED !== 'false' && !
 const PUMP_GAINER_ENABLED = process.env.PUMP_GAINER_ALERT_ENABLED === 'true' && !!FEISHU_WEBHOOK;
 
 const POSITION_HEALTH_ENABLED = process.env.POSITION_HEALTH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
-const POSITION_HEALTH_INTERVAL_MIN = parseInt(process.env.POSITION_HEALTH_INTERVAL_MIN || '15', 10);
+const POSITION_HEALTH_PUSH_HOURS = parseFloat(process.env.POSITION_HEALTH_PUSH_HOURS || '2', 10);
+const POSITION_HEALTH_URGENT_CHECK_MIN = parseInt(process.env.POSITION_HEALTH_URGENT_CHECK_MIN || '15', 10);
 const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
   (process.env.POSITION_HEALTH_WATCH_SYMBOLS || 'LABUSDT')
     .split(/[,，\s]+/)
@@ -1772,8 +1773,10 @@ server.listen(PORT, () => {
   initPositionHealthMonitor({
     enabled: POSITION_HEALTH_ENABLED,
     feishuEnabled: !!FEISHU_WEBHOOK,
-    intervalMin: POSITION_HEALTH_INTERVAL_MIN,
+    pushHours: POSITION_HEALTH_PUSH_HOURS,
+    urgentCheckMin: POSITION_HEALTH_URGENT_CHECK_MIN,
     watchSymbols: POSITION_HEALTH_WATCH_SYMBOLS,
+    getNextPushTime: getNextStablePushTime,
     sendFeishu,
   });
   startPositionHealthScheduler();

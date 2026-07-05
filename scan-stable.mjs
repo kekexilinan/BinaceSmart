@@ -179,7 +179,7 @@ async function checkCoinRightStable(symbol, {
   const tfResults = [];
   for (const tf of [...new Set(tfs)]) {
     const r = await analyzeTfDrawdownTrend(symbol, tf, maxDrawdownPct, { strictTrend });
-    if (!r) return { ...base, isRightStable: false, symbol, detail: base.detail + ` ${tf}数据不足` };
+    if (!r) return { ...base, isRightStable: false, isRightSide: true, symbol, detail: base.detail + ` ${tf}数据不足` };
     tfResults.push(r);
   }
 
@@ -188,6 +188,7 @@ async function checkCoinRightStable(symbol, {
   const trendSummary = tfResults.map(r => `${r.interval}:${r.trendReason}${r.ddPct.toFixed(1)}%`).join(' ');
   return {
     symbol,
+    isRightSide: true,
     isRightStable: allPass,
     score: base.score,
     drawdown,
