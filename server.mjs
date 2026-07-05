@@ -41,6 +41,7 @@ const PORT = parseInt(process.env.PORT || '3388', 10);
 const FAPI_BASE = 'https://fapi.binance.com';
 const CMC_API_KEY = process.env.CMC_API_KEY || '';
 const CMC_BASE = 'https://pro-api.coinmarketcap.com';
+const MC_CACHE_LIMIT = parseInt(process.env.MC_CACHE_LIMIT || '200', 10);
 
 const mcCache = { data: new Map(), ts: 0, TTL: 5 * 60 * 1000 };
 
@@ -579,7 +580,7 @@ function fmtMarketCap(mc) {
 
 async function refreshMcCacheCMC() {
   if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
-  const json = await fetchJson(`${CMC_BASE}/v1/cryptocurrency/listings/latest?limit=500&convert=USD`, {
+  const json = await fetchJson(`${CMC_BASE}/v1/cryptocurrency/listings/latest?limit=${MC_CACHE_LIMIT}&convert=USD`, {
     headers: { 'X-CMC_PRO_API_KEY': CMC_API_KEY, Accept: 'application/json' },
     timeoutMs: 20000,
   });
@@ -595,9 +596,8 @@ async function refreshMcCacheCMC() {
 async function refreshMcCacheGecko() {
   if (Date.now() - mcCache.ts < mcCache.TTL && mcCache.data.size > 0) return;
   const m = new Map();
-  for (let page = 1; page <= 3; page++) {
-    const data = await fetchJson(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=250&page=${page}&sparkline=false`, { timeoutMs: 20000 });
-    if (!data.length) break;
+  const data = await fetchJson(`https://api.coingecko.com/api/v3/coins/markets?vs_currency=usd&order=market_cap_desc&per_page=${MC_CACHE_LIMIT}&page=1&sparkline=false`, { timeoutMs: 20000 });
+  if (data.length) {
     for (const c of data) {
       if (c.market_cap > 0) m.set(c.symbol.toUpperCase(), c.market_cap);
     }
