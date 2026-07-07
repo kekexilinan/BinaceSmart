@@ -63,6 +63,7 @@ async function persistWatchlist(meta = {}) {
   await mkdir(DATA_DIR, { recursive: true });
   await writeFile(WATCHLIST_FILE, JSON.stringify({
     dateKey: lastRefreshDateKey,
+    topN: deps?.topN ?? 20,
     symbols: [...watchSymbols],
     updatedAt: Date.now(),
     gainers: meta.gainers || [],
@@ -79,6 +80,10 @@ async function loadPersistedWatchlist() {
       lastRefreshDateKey = data.dateKey || null;
       for (const sym of watchSymbols) {
         deps?.registerActiveSymbol?.(sym);
+      }
+      // TopN 变更或旧缓存无 topN 字段时强制重新拉榜
+      if (data.topN == null || data.topN !== (deps?.topN ?? 20)) {
+        lastRefreshDateKey = null;
       }
     }
   } catch {
