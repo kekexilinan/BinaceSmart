@@ -23,7 +23,7 @@ import { evaluatePositionHealth, evaluatePositionsBatch } from './position-healt
 import { getUserPositions, addUserPosition, deleteUserPosition } from './user-positions.mjs';
 import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated } from './smart-trend-monitor.mjs';
-import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
+import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 
 const FETCH_TIMEOUT_MS = 15000;
 
@@ -139,21 +139,24 @@ async function pmap(items, fn, concurrency = 20) {
 
 async function load8amBaselinePrices(symbols) {
   const { dateKey, openTime } = getBaseline8amInfo();
-  if (baseline8amCache.dateKey === dateKey && Object.keys(baseline8amCache.prices).length > 50) {
-    return { dateKey, openTime, prices: baseline8amCache.prices };
+  if (baseline8amCache.dateKey !== dateKey) {
+    baseline8amCache = { dateKey, prices: {} };
   }
-  const prices = await pmap(symbols, async (sym) => {
-    const klines = await proxyBinance(`/fapi/v1/klines?symbol=${sym}&interval=1h&startTime=${openTime}&limit=1`);
-    if (!Array.isArray(klines) || klines.length === 0) return null;
-    const open = parseFloat(klines[0][1]);
-    return open > 0 ? open : null;
-  }, 20);
-  const filtered = {};
-  for (const [sym, price] of Object.entries(prices)) {
-    if (price != null) filtered[sym] = price;
+
+  const missing = symbols.filter(sym => !baseline8amCache.prices[sym]);
+  if (missing.length) {
+    const fetched = await pmap(missing, async (sym) => {
+      const klines = await proxyBinance(`/fapi/v1/klines?symbol=${sym}&interval=1h&startTime=${openTime}&limit=1`);
+      if (!Array.isArray(klines) || klines.length === 0) return null;
+      const open = parseFloat(klines[0][1]);
+      return open > 0 ? open : null;
+    }, 20);
+    for (const [sym, price] of Object.entries(fetched)) {
+      if (price != null) baseline8amCache.prices[sym] = price;
+    }
   }
-  baseline8amCache = { dateKey, prices: filtered };
-  return { dateKey, openTime, prices: filtered };
+
+  return { dateKey, openTime, prices: baseline8amCache.prices };
 }
 
 async function handleGainersSince8am(limit) {
@@ -221,7 +224,11 @@ async function handleLosersSince8am(limit) {
 async function batchEnrichSmartTrendDigest(rows) {
   if (!rows.length) return rows;
   const symbols = rows.map(r => r.symbol);
-  const mcMap = await batchFetchMarketCaps(symbols);
+  const [mcMap, priceMap, { prices: baselines }] = await Promise.all([
+    batchFetchMarketCaps(symbols),
+    fetchCurrentPrices(symbols),
+    load8amBaselinePrices(symbols),
+  ]);
 
   const fundingMap = {};
   await pmap(symbols, async (sym) => {
@@ -235,9 +242,14 @@ async function batchEnrichSmartTrendDigest(rows) {
 
   return rows.map(r => {
     const fr = fundingMap[r.symbol] ?? 0;
+    const price = r.price > 0 ? r.price : (priceMap[r.symbol] || 0);
+    const base = baselines[r.symbol];
+    const change8am = base && base > 0 && price > 0 ? ((price - base) / base) * 100 : null;
     return {
       ...r,
-      priceLabel: fmtPrice(r.price),
+      price,
+      change8am,
+      priceLabel: fmtPrice(price),
       marketCapLabel: fmtMarketCap(mcMap[r.symbol]),
       fundingRateLabel: `${(fr * 100).toFixed(4)}%`,
     };
@@ -445,7 +457,7 @@ const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && !!FEI
 const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '30', 10);
 const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '30', 10);
 const SMART_TREND_RATIO_CHANGE_PCT = parseFloat(process.env.SMART_TREND_RATIO_CHANGE_PCT || '10', 10);
-const SMART_TREND_DIGEST_CHUNK = parseInt(process.env.SMART_TREND_DIGEST_CHUNK || '30', 10);
+const SMART_TREND_DIGEST_PAGE_SIZE = parseInt(process.env.SMART_TREND_DIGEST_PAGE_SIZE || '10', 10);
 const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'false';
 const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
 const SMART_TREND_WATCH_SYMBOLS = new Set(
@@ -1937,9 +1949,10 @@ server.listen(PORT, () => {
     intervalMin: SMART_TREND_INTERVAL_MIN,
     cooldownMin: SMART_TREND_COOLDOWN_MIN,
     ratioChangePct: SMART_TREND_RATIO_CHANGE_PCT,
-    digestChunkSize: SMART_TREND_DIGEST_CHUNK,
+    digestPageSize: SMART_TREND_DIGEST_PAGE_SIZE,
     watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
+    getWatchlistGroups: SMART_TREND_DYNAMIC_WATCH ? getWatchlistGroups : undefined,
     sendFeishuCard: sendFeishuCardV2,
     getWhaleHistory,
     batchEnrichDigest: batchEnrichSmartTrendDigest,

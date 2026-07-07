@@ -12,6 +12,10 @@ const WATCHLIST_FILE = join(DATA_DIR, 'smart-trend-watchlist.json');
 let deps = null;
 /** @type {Set<string>} */
 let watchSymbols = new Set();
+/** @type {{ symbol: string, change: number }[]} */
+let gainerList = [];
+/** @type {{ symbol: string, change: number }[]} */
+let loserList = [];
 let lastRefreshDateKey = null;
 let refreshTimer = null;
 
@@ -56,6 +60,17 @@ export function getWatchlistInfo() {
     dateKey: lastRefreshDateKey,
     source: '8am_gainer_loser_board',
     topN: deps?.topN ?? 20,
+    gainers: gainerList,
+    losers: loserList,
+  };
+}
+
+export function getWatchlistGroups() {
+  return {
+    dateKey: lastRefreshDateKey,
+    topN: deps?.topN ?? 20,
+    gainers: gainerList,
+    losers: loserList,
   };
 }
 
@@ -78,10 +93,17 @@ async function loadPersistedWatchlist() {
     if (data.symbols?.length) {
       watchSymbols = new Set(data.symbols.map(s => s.toUpperCase()));
       lastRefreshDateKey = data.dateKey || null;
+      gainerList = (data.gainers || []).map(g => ({
+        symbol: g.symbol.toUpperCase(),
+        change: g.change,
+      }));
+      loserList = (data.losers || []).map(l => ({
+        symbol: l.symbol.toUpperCase(),
+        change: l.change,
+      }));
       for (const sym of watchSymbols) {
         deps?.registerActiveSymbol?.(sym);
       }
-      // TopN 变更或旧缓存无 topN 字段时强制重新拉榜
       if (data.topN == null || data.topN !== (deps?.topN ?? 20)) {
         lastRefreshDateKey = null;
       }
@@ -116,6 +138,8 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
 
   watchSymbols = next;
   lastRefreshDateKey = gainers.meta?.baselineDate || dateKey;
+  gainerList = gainers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
+  loserList = losers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
 
   for (const sym of watchSymbols) {
     deps.registerActiveSymbol?.(sym);
@@ -124,8 +148,8 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
   deps.onWatchlistUpdated?.([...watchSymbols], prevSymbols);
 
   await persistWatchlist({
-    gainers: gainers.items.map(i => ({ symbol: i.symbol, change: i.change })),
-    losers: losers.items.map(i => ({ symbol: i.symbol, change: i.change })),
+    gainers: gainerList,
+    losers: loserList,
   });
 
   const labels = [...watchSymbols].slice(0, 12).map(s => s.replace(/USDT$/, '')).join(', ');

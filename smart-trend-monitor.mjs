@@ -1,5 +1,5 @@
 /**
- * 聪明钱监控 · 每 30 分钟整点推送全池变化摘要（不含做多/做空建议）
+ * 聪明钱监控 · 每 30 分钟整点推送全池变化摘要（含变化幅度排序与做多/做空参考）
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -47,18 +47,52 @@ export function getNextHalfHourShanghai(now = new Date()) {
   return nextDay;
 }
 
+const RATIO_WARN_PCT = 5;
+
 function ratioDeltaLabel(pct) {
   if (pct == null || Number.isNaN(pct)) return '-';
   return pct >= 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
 }
 
-function changeTrendLabel(row, highlightPct = 10) {
-  if (row.ratioDeltaPct == null) return '首次';
+function ratioDeltaDisplay(pct, strongPct = 10) {
+  if (pct == null || Number.isNaN(pct)) return '-';
+  const abs = Math.abs(pct);
+  const text = ratioDeltaLabel(pct);
+  if (abs >= strongPct) return pct > 0 ? `🔥📈 ${text}` : `🔥📉 ${text}`;
+  if (abs >= RATIO_WARN_PCT) return pct > 0 ? `⚡📈 ${text}` : `⚡📉 ${text}`;
+  return text;
+}
+
+function changeTrendLabel(row, strongPct = 10) {
+  if (row.ratioDeltaPct == null) return '— 首次';
   const d = row.ratioDeltaPct;
-  if (d >= highlightPct) return '变多';
-  if (d <= -highlightPct) return '变少';
+  if (d >= strongPct) return '🔥 变多';
+  if (d <= -strongPct) return '🔥 变少';
+  if (d >= RATIO_WARN_PCT) return '⚡ 变多';
+  if (d <= -RATIO_WARN_PCT) return '⚡ 变少';
   if (Math.abs(d) < 0.05) return '持平';
   return d > 0 ? '微增' : '微减';
+}
+
+function tradeHintLabel(pct, strongPct = 10) {
+  if (pct == null || Number.isNaN(pct)) return '-';
+  if (pct >= strongPct) return '📈 考虑做多';
+  if (pct >= RATIO_WARN_PCT) return '📈 偏做多';
+  if (pct <= -strongPct) return '📉 考虑做空';
+  if (pct <= -RATIO_WARN_PCT) return '📉 偏做空';
+  return '—';
+}
+
+function sortByRatioChange(rows, tieBreakFn) {
+  return rows.sort((a, b) => {
+    const hasA = a.ratioDeltaPct != null;
+    const hasB = b.ratioDeltaPct != null;
+    if (hasA && !hasB) return -1;
+    if (!hasA && hasB) return 1;
+    const absDiff = Math.abs(b.ratioDeltaPct ?? 0) - Math.abs(a.ratioDeltaPct ?? 0);
+    if (absDiff !== 0) return absDiff;
+    return tieBreakFn(a, b);
+  });
 }
 
 async function loadPersistedState() {
@@ -181,11 +215,16 @@ function buildDigestTableRows(rows, highlightPct) {
     const ratioText = r.prevRatio != null
       ? `${r.prevRatio.toFixed(2)}→${r.ratio.toFixed(2)}`
       : r.ratio.toFixed(2);
+    const chg8 = r.change8am != null
+      ? `${r.change8am >= 0 ? '+' : ''}${r.change8am.toFixed(1)}%`
+      : '-';
     return {
       coin: `[${r.badge}] ${r.label}`,
+      chg8am: chg8,
       chg30m: trend,
       ratio: ratioText,
-      delta: ratioDeltaLabel(r.ratioDeltaPct),
+      delta: ratioDeltaDisplay(r.ratioDeltaPct, highlightPct),
+      hint: tradeHintLabel(r.ratioDeltaPct, highlightPct),
       price: r.priceLabel ? `$${r.priceLabel}` : '-',
       mc: r.marketCapLabel || '-',
       funding: r.fundingRateLabel || '-',
@@ -195,36 +234,47 @@ function buildDigestTableRows(rows, highlightPct) {
 
 const DIGEST_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'chg8am', display_name: '8点来', data_type: 'text', width: 'auto' },
   { name: 'chg30m', display_name: '30min', data_type: 'text', width: 'auto' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
   { name: 'delta', display_name: '变化%', data_type: 'text', width: 'auto' },
+  { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
   { name: 'price', display_name: '价格', data_type: 'text', width: 'auto' },
   { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
   { name: 'funding', display_name: '费率', data_type: 'text', width: 'auto' },
 ];
 
-export function buildSmartTrendDigestElements(rows, { intervalMin = 30, highlightPct = 10, totalCount = 0, chunkSize = 30, partIndex = 0, partTotal = 1 } = {}) {
+/** 涨幅榜 / 跌幅榜 单张卡片（表格内置分页） */
+export function buildBoardDigestElements(rows, {
+  boardLabel = '涨幅榜',
+  intervalMin = 30,
+  highlightPct = 10,
+  pageSize = 10,
+  dateKey = '',
+  topN = 30,
+} = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-  const bigMoves = rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct);
+  const bigMoves = rows
+    .filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= RATIO_WARN_PCT)
+    .sort((a, b) => Math.abs(b.ratioDeltaPct) - Math.abs(a.ratioDeltaPct));
 
-  const partNote = partTotal > 1 ? ` · 第 ${partIndex + 1}/${partTotal} 部分` : '';
   const elements = [
     {
       tag: 'markdown',
-      content: `**⏰ ${now}**${partNote}\n**聪明钱全池快照** · 本表 ${rows.length} 个币种 · 全池 ${totalCount || rows.length} 个\n_每 ${intervalMin} 分钟整点/半点 · ≥${highlightPct}% 标变多/变少 · 不含买卖建议_`,
+      content: `**⏰ ${now}**\n**${boardLabel}** · Top${topN} · ${rows.length} 个币种${dateKey ? ` · ${dateKey} 8点基准` : ''}\n_按聪明钱变化幅度排序 · ⚡≥5% · 🔥≥${highlightPct}% · 表格可翻页 · 参考列仅供研判_`,
     },
   ];
 
-  if (partIndex === 0 && bigMoves.length > 0) {
+  if (bigMoves.length > 0) {
     elements.push({
       tag: 'markdown',
-      content: `**⚡ 显著变化（≥${highlightPct}%）:** ${bigMoves.map(r => `${r.label} ${ratioDeltaLabel(r.ratioDeltaPct)}`).join(' · ')}`,
+      content: `**⚡ 聪明钱显著变化:** ${bigMoves.map(r => `${r.label} ${ratioDeltaDisplay(r.ratioDeltaPct, highlightPct)} ${tradeHintLabel(r.ratioDeltaPct, highlightPct)}`).join(' · ')}`,
     });
   }
 
   elements.push({
     tag: 'table',
-    page_size: 20,
+    page_size: Math.max(5, Math.min(20, pageSize)),
     row_height: 'low',
     freeze_first_column: true,
     columns: DIGEST_TABLE_COLUMNS,
@@ -242,62 +292,86 @@ export async function runSmartTrendPush({ force = false } = {}) {
   running = true;
   const intervalMin = deps.intervalMin ?? 30;
   const highlightPct = deps.ratioChangePct ?? 10;
+  const pageSize = deps.digestPageSize ?? 10;
+  const groups = deps.getWatchlistGroups?.() || { gainers: [], losers: [], dateKey: '', topN: 30 };
+  const gainerMap = new Map((groups.gainers || []).map(g => [g.symbol.toUpperCase(), g.change]));
+  const loserMap = new Map((groups.losers || []).map(l => [l.symbol.toUpperCase(), l.change]));
 
   try {
     console.log(`\n  📤 聪明钱全池扫描 (${watchSymbols.size} 个)...`);
-    const rows = [];
+    const rowMap = new Map();
     let failed = 0;
 
     for (const sym of watchSymbols) {
       try {
-        rows.push(await scanSymbolForDigest(sym));
+        const row = await scanSymbolForDigest(sym);
+        rowMap.set(sym.toUpperCase(), row);
       } catch (e) {
         failed += 1;
         console.warn(`  ⚠ 聪明钱扫描 ${sym} 失败: ${e.message}`);
       }
     }
 
-    if (!rows.length) {
+    if (!rowMap.size) {
       console.warn(`  ⚠ 聪明钱全池扫描: 全部失败，跳过推送`);
       return;
     }
 
+    const allRows = [...rowMap.values()];
     const enriched = deps.batchEnrichDigest
-      ? await deps.batchEnrichDigest(rows).catch(() => rows)
-      : rows;
+      ? await deps.batchEnrichDigest(allRows).catch(() => allRows)
+      : allRows;
+    const enrichedMap = new Map(enriched.map(r => [r.symbol, r]));
 
-    enriched.sort((a, b) => {
-      const da = Math.abs(a.ratioDeltaPct ?? 0);
-      const db = Math.abs(b.ratioDeltaPct ?? 0);
-      return db - da || (b.ratio ?? 0) - (a.ratio ?? 0);
-    });
+    const buildBoardRows = (boardList, tieBreakFn) => sortByRatioChange(
+      boardList
+        .map(({ symbol, change }) => {
+          const row = enrichedMap.get(symbol.toUpperCase());
+          if (!row) return null;
+          return { ...row, change8am: row.change8am ?? change };
+        })
+        .filter(Boolean),
+      tieBreakFn,
+    );
 
-    const chunkSize = deps.digestChunkSize ?? 30;
-    const bigCount = enriched.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
-    const chunks = [];
-    for (let i = 0; i < enriched.length; i += chunkSize) {
-      chunks.push(enriched.slice(i, i + chunkSize));
-    }
-    const partTotal = chunks.length;
+    const gainerRows = buildBoardRows(
+      groups.gainers || [],
+      (a, b) => (b.change8am ?? 0) - (a.change8am ?? 0),
+    );
+    const loserRows = buildBoardRows(
+      groups.losers || [],
+      (a, b) => (a.change8am ?? 0) - (b.change8am ?? 0),
+    );
 
-    for (let i = 0; i < chunks.length; i++) {
-      const chunk = chunks[i];
-      const elements = buildSmartTrendDigestElements(chunk, {
+    const boards = [
+      { key: 'gainer', label: '📈 8点涨幅榜', rows: gainerRows, template: 'green' },
+      { key: 'loser', label: '📉 8点跌幅榜', rows: loserRows, template: 'red' },
+    ];
+
+    let sent = 0;
+    for (const board of boards) {
+      if (!board.rows.length) {
+        console.warn(`  ⚠ ${board.label}: 无可用数据，跳过`);
+        continue;
+      }
+      const bigCount = board.rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+      const elements = buildBoardDigestElements(board.rows, {
+        boardLabel: board.label,
         intervalMin,
         highlightPct,
-        totalCount: watchSymbols.size,
-        chunkSize,
-        partIndex: i,
-        partTotal,
+        pageSize,
+        dateKey: groups.dateKey,
+        topN: groups.topN ?? 30,
       });
-      const partSuffix = partTotal > 1 ? ` (${i + 1}/${partTotal})` : '';
       const title = bigCount > 0
-        ? `📊 聪明钱快照${partSuffix} · ${watchSymbols.size}币 · ${bigCount}个显著变化`
-        : `📊 聪明钱快照${partSuffix} · ${watchSymbols.size}币`;
-      await deps.sendFeishuCard(title, elements, bigCount > 0 ? 'blue' : 'grey');
+        ? `${board.label} · Top${groups.topN ?? 30} · ${bigCount}个聪明钱显著变化`
+        : `${board.label} · Top${groups.topN ?? 30}`;
+      await deps.sendFeishuCard(title, elements, board.template);
+      sent += 1;
     }
 
-    console.log(`  ✓ 聪明钱全池推送: ${enriched.length} 个币种 · ${bigCount} 个≥${highlightPct}%变化 · ${partTotal} 条飞书${failed ? ` · ${failed} 扫描失败` : ''}`);
+    const totalBig = [...gainerRows, ...loserRows].filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+    console.log(`  ✓ 聪明钱榜单推送: 涨幅 ${gainerRows.length} + 跌幅 ${loserRows.length} · ${sent} 张卡片 · ${totalBig} 个≥${highlightPct}%变化${failed ? ` · ${failed} 扫描失败` : ''}`);
   } catch (e) {
     console.warn(`  ⚠ 聪明钱全池推送失败: ${e.message}`);
   } finally {
@@ -315,7 +389,7 @@ export function startSmartTrendScheduler() {
     ? `${syms.slice(0, 10).map(s => s.replace(/USDT$/, '')).join(', ')} 等 ${syms.length} 个`
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
-  console.log(`  📊 聪明钱全池推送: 上海时间每整点/半点 · ${intervalMin}min · 监控 ${watchLabel || '（池为空）'} · 仅展示变化不含买卖建议`);
+  console.log(`  📊 聪明钱榜单推送: 上海时间每整点/半点 · 涨幅榜+跌幅榜各1张卡片(表格分页) · 监控 ${watchLabel || '（池为空）'}`);
 
   const scheduleNext = () => {
     const next = getNextHalfHourShanghai();
