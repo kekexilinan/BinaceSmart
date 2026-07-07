@@ -218,6 +218,32 @@ async function handleLosersSince8am(limit) {
   };
 }
 
+async function batchEnrichSmartTrendDigest(rows) {
+  if (!rows.length) return rows;
+  const symbols = rows.map(r => r.symbol);
+  const mcMap = await batchFetchMarketCaps(symbols);
+
+  const fundingMap = {};
+  await pmap(symbols, async (sym) => {
+    try {
+      const p = await proxyBinance(`/fapi/v1/premiumIndex?symbol=${sym}`);
+      fundingMap[sym] = parseFloat(p?.lastFundingRate) || 0;
+    } catch {
+      fundingMap[sym] = 0;
+    }
+  }, 8);
+
+  return rows.map(r => {
+    const fr = fundingMap[r.symbol] ?? 0;
+    return {
+      ...r,
+      priceLabel: fmtPrice(r.price),
+      marketCapLabel: fmtMarketCap(mcMap[r.symbol]),
+      fundingRateLabel: `${(fr * 100).toFixed(4)}%`,
+    };
+  });
+}
+
 async function fetchSmartTrendContext(symbol, priceHint = null) {
   const sym = symbol.toUpperCase();
   const [premiumRes, topPosRes, takerRes, klinesRes, mcMap] = await Promise.all([
@@ -1910,7 +1936,7 @@ server.listen(PORT, () => {
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     sendFeishuCard: sendFeishuCardV2,
     getWhaleHistory,
-    fetchMarketContext: fetchSmartTrendContext,
+    batchEnrichDigest: batchEnrichSmartTrendDigest,
   })).then(() => startSmartTrendScheduler()).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
   });

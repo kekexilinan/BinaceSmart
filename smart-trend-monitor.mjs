@@ -1,5 +1,5 @@
 /**
- * 聪明钱变多/变少 飞书推送（含做多/做空建议）
+ * 聪明钱监控 · 每 30 分钟整点推送全池变化摘要（不含做多/做空建议）
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -11,125 +11,54 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const STATE_FILE = join(DATA_DIR, 'smart-trend-state.json');
 
-const TREND_LABELS = {
-  increase: '聪明钱变多',
-  decrease: '聪明钱变少',
-  flip_long: '聪明钱转多',
-  flip_short: '聪明钱转空',
-};
-
 let deps = null;
 let running = false;
+let digestTimer = null;
 /** @type {Map<string, { score: number, direction: string, ratio: number, initialized: boolean }>} */
 const lastState = new Map();
-/** @type {Map<string, number>} key: `${symbol}:${trend}` */
-const lastPushedAt = new Map();
 let saveQueue = Promise.resolve();
 
-export function getTradeRecommendation(trend) {
-  if (trend === 'increase' || trend === 'flip_long') {
-    return { action: 'long', label: '建议做多', emoji: '📈' };
+function getShanghaiParts(date = new Date()) {
+  const parts = {};
+  for (const { type, value } of new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Asia/Shanghai',
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).formatToParts(date)) {
+    parts[type] = value;
   }
-  if (trend === 'decrease' || trend === 'flip_short') {
-    return { action: 'short', label: '建议做空', emoji: '📉' };
-  }
-  return { action: 'hold', label: '观望', emoji: '⏸' };
+  return parts;
 }
 
-/** 综合聪明钱变化 + 价格趋势 + 资金费率 + 大户/主动买卖 给出做多/做空/观望 */
-export function evaluateTradeDecision({ trend, analysis, ctx, ratioDeltaPct = 0 }) {
-  let longPts = 0;
-  let shortPts = 0;
-  const reasons = [];
+export function getNextHalfHourShanghai(now = new Date()) {
+  const p = getShanghaiParts(now);
+  const dateKey = `${p.year}-${p.month}-${p.day}`;
+  const hour = parseInt(p.hour, 10);
+  const minute = parseInt(p.minute, 10);
 
-  const ratioLabel = ratioDeltaPct >= 0 ? `+${ratioDeltaPct.toFixed(1)}%` : `${ratioDeltaPct.toFixed(1)}%`;
-  if (trend === 'increase' || trend === 'flip_long') {
-    longPts += 3;
-    reasons.push(`净多空比${ratioLabel}`);
-  } else if (trend === 'decrease' || trend === 'flip_short') {
-    shortPts += 3;
-    reasons.push(`净多空比${ratioLabel}`);
+  if (minute < 30) {
+    return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:30:00+08:00`);
   }
+  const nextHour = hour + 1;
+  if (nextHour < 24) {
+    return new Date(`${dateKey}T${String(nextHour).padStart(2, '0')}:00:00+08:00`);
+  }
+  const nextDay = new Date(`${dateKey}T00:00:00+08:00`);
+  nextDay.setDate(nextDay.getDate() + 1);
+  return nextDay;
+}
 
-  if (ctx?.change8am != null) {
-    if (ctx.change8am > 1) {
-      longPts += 2;
-      reasons.push(`8点来+${ctx.change8am.toFixed(1)}%`);
-    } else if (ctx.change8am < -1) {
-      shortPts += 2;
-      reasons.push(`8点来${ctx.change8am.toFixed(1)}%`);
-    }
-  }
+function ratioDeltaLabel(pct) {
+  if (pct == null || Number.isNaN(pct)) return '-';
+  return pct >= 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
+}
 
-  if (ctx?.maTrend === 'bull') {
-    longPts += 2;
-    reasons.push('1H均线多头');
-  } else if (ctx?.maTrend === 'bear') {
-    shortPts += 2;
-    reasons.push('1H均线空头');
-  }
-
-  if (ctx?.fundingRate != null) {
-    if (ctx.fundingRate < -0.0003) {
-      longPts += 1;
-      reasons.push(`负费率${(ctx.fundingRate * 100).toFixed(3)}%`);
-    } else if (ctx.fundingRate > 0.0008) {
-      shortPts += 1;
-      reasons.push(`高费率${(ctx.fundingRate * 100).toFixed(3)}%`);
-    }
-  }
-
-  if (ctx?.topPosTrend > 0.03) {
-    longPts += 1;
-    reasons.push('大户持仓比↑');
-  } else if (ctx?.topPosTrend < -0.03) {
-    shortPts += 1;
-    reasons.push('大户持仓比↓');
-  }
-
-  if (ctx?.takerTrend > 0.05) {
-    longPts += 1;
-    reasons.push('主动买入↑');
-  } else if (ctx?.takerTrend < -0.05) {
-    shortPts += 1;
-    reasons.push('主动卖出↑');
-  }
-
-  if (analysis?.direction === 'long') longPts += 1;
-  else if (analysis?.direction === 'short') shortPts += 1;
-
-  const diff = longPts - shortPts;
-  if (diff >= 2) {
-    return {
-      action: 'long',
-      label: '建议做多',
-      emoji: '📈',
-      confidence: diff >= 5 ? '高' : '中',
-      reasons,
-      longPts,
-      shortPts,
-    };
-  }
-  if (diff <= -2) {
-    return {
-      action: 'short',
-      label: '建议做空',
-      emoji: '📉',
-      confidence: diff <= -5 ? '高' : '中',
-      reasons,
-      longPts,
-      shortPts,
-    };
-  }
-  return {
-    action: 'hold',
-    label: '观望',
-    emoji: '⏸',
-    confidence: '低',
-    reasons,
-    longPts,
-    shortPts,
-  };
+function changeTrendLabel(row, highlightPct = 10) {
+  if (row.ratioDeltaPct == null) return '首次';
+  const d = row.ratioDeltaPct;
+  if (d >= highlightPct) return '变多';
+  if (d <= -highlightPct) return '变少';
+  if (Math.abs(d) < 0.05) return '持平';
+  return d > 0 ? '微增' : '微减';
 }
 
 async function loadPersistedState() {
@@ -142,32 +71,28 @@ async function loadPersistedState() {
       }
     }
   } catch {
-    // 首次运行无状态文件
+    // 首次运行
   }
 }
 
 function queueSaveState() {
   saveQueue = saveQueue.then(async () => {
     await mkdir(DATA_DIR, { recursive: true });
-    const obj = Object.fromEntries(lastState);
-    await writeFile(STATE_FILE, JSON.stringify(obj), 'utf8');
+    await writeFile(STATE_FILE, JSON.stringify(Object.fromEntries(lastState)), 'utf8');
   }).catch(() => {});
 }
 
 async function seedFromWhaleHistory(symbol) {
   if (!deps?.getWhaleHistory) return;
   const sym = symbol.toUpperCase();
-  const existing = lastState.get(sym);
-  if (existing?.initialized) return;
+  if (lastState.get(sym)?.initialized) return;
 
   try {
     const hist = await deps.getWhaleHistory(sym, 72);
     const points = hist?.points || [];
     if (!points.length) return;
-
     const last = points[points.length - 1];
     const ratio = parseFloat(last.longShortRatio) || 0;
-    const direction = ratio > 1 ? 'long' : ratio < 1 ? 'short' : 'neutral';
     const rawLike = {
       longShortRatio: ratio,
       longProfitTraders: last.longTraders || 0,
@@ -187,9 +112,7 @@ async function seedFromWhaleHistory(symbol) {
       initialized: true,
     });
     queueSaveState();
-  } catch {
-    // 历史种子失败不影响后续扫描
-  }
+  } catch {}
 }
 
 export function onWatchlistUpdated(newSymbols, prevSymbols) {
@@ -205,18 +128,14 @@ export function onWatchlistUpdated(newSymbols, prevSymbols) {
 }
 
 function resolveWatchSymbols() {
-  if (typeof deps?.getWatchSymbols === 'function') {
-    return deps.getWatchSymbols();
-  }
+  if (typeof deps?.getWatchSymbols === 'function') return deps.getWatchSymbols();
   return deps?.watchSymbols;
 }
 
 export async function initSmartTrendMonitor(dependencies) {
   deps = dependencies;
   await loadPersistedState();
-
-  const symbols = resolveWatchSymbols();
-  for (const sym of symbols || []) {
+  for (const sym of resolveWatchSymbols() || []) {
     registerActiveSymbol(sym);
     if (!lastState.has(sym.toUpperCase())) {
       await seedFromWhaleHistory(sym);
@@ -224,53 +143,17 @@ export async function initSmartTrendMonitor(dependencies) {
   }
 }
 
-function cooldownMs() {
-  return (deps?.cooldownMin ?? 60) * 60 * 1000;
-}
-
-function detectTrend(prev, curr) {
-  if (!prev?.initialized) return null;
-
-  const ratioThresholdPct = deps?.ratioChangePct ?? 10;
-
-  // 方向翻转：净多空比由空转多 / 由多转空
-  if (
-    prev.direction !== curr.direction
-    && curr.direction !== 'neutral'
-    && prev.direction !== 'neutral'
-  ) {
-    return curr.direction === 'long' ? 'flip_long' : 'flip_short';
-  }
-
-  // 严格按净多空比变化判定
-  if (prev.ratio > 0) {
-    const ratioDeltaPct = ((curr.ratio - prev.ratio) / prev.ratio) * 100;
-    if (ratioDeltaPct >= ratioThresholdPct) return 'increase';
-    if (ratioDeltaPct <= -ratioThresholdPct) return 'decrease';
-  }
-
-  return null;
-}
-
-function canPush(symbol, action, { force = false } = {}) {
-  if (force) return true;
-  const key = `${symbol}:${action}`;
-  const last = lastPushedAt.get(key) ?? 0;
-  return Date.now() - last >= cooldownMs();
-}
-
-function markPushed(symbol, action) {
-  lastPushedAt.set(`${symbol}:${action}`, Date.now());
-}
-
-async function scanSymbol(symbol, { force = false } = {}) {
+async function scanSymbolForDigest(symbol) {
   const sym = symbol.toUpperCase();
   registerActiveSymbol(sym);
   const raw = await fetchSmartSignal(sym);
-  const price = parseFloat(raw?.lastPrice) || null;
+  const price = parseFloat(raw?.lastPrice) || 0;
   const analysis = analyzeSmartSignal(raw, price);
   const prev = lastState.get(sym);
-  const trend = detectTrend(prev, analysis);
+
+  const ratioDeltaPct = prev?.initialized && prev.ratio > 0
+    ? ((analysis.ratio - prev.ratio) / prev.ratio) * 100
+    : null;
 
   lastState.set(sym, {
     score: analysis.score,
@@ -280,105 +163,65 @@ async function scanSymbol(symbol, { force = false } = {}) {
   });
   queueSaveState();
 
-  if (!trend) return null;
-
-  const ratioDeltaPct = prev?.ratio > 0
-    ? ((analysis.ratio - prev.ratio) / prev.ratio) * 100
-    : 0;
-
-  const ctx = deps?.fetchMarketContext
-    ? await deps.fetchMarketContext(sym, price).catch(() => ({}))
-    : {};
-
-  const decision = evaluateTradeDecision({ trend, analysis, ctx, ratioDeltaPct });
-
-  if (decision.action === 'hold') {
-    console.log(`  · ${sym.replace(/USDT$/, '')} 净多空比${ratioLabel(ratioDeltaPct)}但综合信号冲突→观望，不推送`);
-    return null;
-  }
-
-  if (!canPush(sym, decision.action, { force })) return null;
-
-  markPushed(sym, decision.action);
-
-  const displayPrice = ctx.price ?? price;
   return {
     symbol: sym,
     label: sym.replace(/USDT$/, ''),
-    trend,
-    trendLabel: TREND_LABELS[trend],
-    recommendation: decision.label,
-    recommendationAction: decision.action,
-    recommendationEmoji: decision.emoji,
-    confidence: decision.confidence,
-    reasons: decision.reasons,
-    prevScore: prev?.score,
-    score: analysis.score,
-    prevDirection: prev?.direction,
-    direction: analysis.direction,
     badge: analysis.badge,
+    direction: analysis.direction,
     ratio: analysis.ratio,
-    prevRatio: prev?.ratio,
+    prevRatio: prev?.initialized ? prev.ratio : null,
     ratioDeltaPct,
-    price: displayPrice,
-    priceLabel: ctx.priceLabel ?? (displayPrice ? String(displayPrice) : '-'),
-    marketCap: ctx.marketCap ?? 0,
-    marketCapLabel: ctx.marketCapLabel ?? '-',
-    fundingRate: ctx.fundingRate ?? null,
-    fundingRateLabel: ctx.fundingRateLabel ?? '-',
-    change8am: ctx.change8am ?? null,
-    maTrend: ctx.maTrend ?? 'neutral',
-    signals: analysis.signals.slice(0, 3),
-    detail: analysis.detail,
+    price,
   };
 }
 
-function ratioLabel(pct) {
-  return pct >= 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
-}
-
-export function buildSmartTrendAlertElements(alerts, { intervalMin = 30, cooldownMin = 30, ratioChangePct = 10 } = {}) {
+export function buildSmartTrendDigestElements(rows, { intervalMin = 30, highlightPct = 10, totalCount = 0 } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
-  const watchLabel = alerts.map(a => a.label).join(', ');
+  const bigMoves = rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+
   const elements = [
     {
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**聪明钱变化通知** · ${watchLabel}\n_净多空比≥${ratioChangePct}% + 趋势/费率/大户综合判定 · 每 ${intervalMin} 分钟 · 同方向 ${cooldownMin} 分钟去重_`,
+      content: `**⏰ ${now}**\n**聪明钱全池快照** · 共 ${totalCount || rows.length} 个币种\n_每 ${intervalMin} 分钟整点推送 · 30min 净多空比变化 · ≥${highlightPct}% 标为变多/变少 · 不含买卖建议_`,
     },
   ];
 
+  if (bigMoves > 0) {
+    elements.push({
+      tag: 'markdown',
+      content: `**⚡ 显著变化（≥${highlightPct}%）:** ${rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).map(r => `${r.label} ${ratioDeltaLabel(r.ratioDeltaPct)}`).join(' · ')}`,
+    });
+  }
+
   elements.push({
     tag: 'table',
-    page_size: 10,
+    page_size: 20,
     row_height: 'low',
     freeze_first_column: true,
+    header_style: { bold: true, lines: 1, background_style: 'grey', text_size: 'normal', text_align: 'left' },
     columns: [
       { name: 'coin', display_name: '币种', data_type: 'text', width: '70px' },
-      { name: 'action', display_name: '建议', data_type: 'lark_md', width: 'auto' },
+      { name: 'trend', display_name: '30min变化', data_type: 'lark_md', width: 'auto' },
+      { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
+      { name: 'delta', display_name: 'Δ%', data_type: 'text', width: 'auto' },
       { name: 'price', display_name: '价格', data_type: 'text', width: 'auto' },
       { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
       { name: 'funding', display_name: '资金费率', data_type: 'text', width: 'auto' },
-      { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
-      { name: 'chg8', display_name: '8点来', data_type: 'text', width: 'auto' },
-      { name: 'reasons', display_name: '依据', data_type: 'text', width: 'auto' },
     ],
-    rows: alerts.map(a => {
-      const actionColor = a.recommendationAction === 'short' ? 'red' : 'green';
-      const ratioText = a.prevRatio != null
-        ? `${a.prevRatio.toFixed(2)}→${a.ratio.toFixed(2)}`
-        : a.ratio.toFixed(2);
-      const chg8 = a.change8am != null
-        ? `${a.change8am >= 0 ? '+' : ''}${a.change8am.toFixed(1)}%`
-        : '-';
+    rows: rows.map(r => {
+      const trend = changeTrendLabel(r, highlightPct);
+      const trendColor = trend === '变少' || trend === '微减' ? 'red' : trend === '变多' || trend === '微增' ? 'green' : 'grey';
+      const ratioText = r.prevRatio != null
+        ? `${r.prevRatio.toFixed(2)}→${r.ratio.toFixed(2)}`
+        : r.ratio.toFixed(2);
       return {
-        coin: `[${a.badge}] ${a.label}`,
-        action: `<font color='${actionColor}'>**${a.recommendationEmoji} ${a.recommendation}** (${a.confidence})</font>`,
-        price: `$${a.priceLabel}`,
-        mc: a.marketCapLabel,
-        funding: a.fundingRateLabel,
+        coin: `[${r.badge}] ${r.label}`,
+        trend: `<font color='${trendColor}'>${trend}</font>`,
         ratio: ratioText,
-        chg8,
-        reasons: (a.reasons || []).join(' · '),
+        delta: ratioDeltaLabel(r.ratioDeltaPct),
+        price: r.priceLabel ? `$${r.priceLabel}` : '-',
+        mc: r.marketCapLabel || '-',
+        funding: r.fundingRateLabel || '-',
       };
     }),
   });
@@ -392,36 +235,53 @@ export async function runSmartTrendPush({ force = false } = {}) {
   if (!watchSymbols?.size) return;
 
   running = true;
+  const intervalMin = deps.intervalMin ?? 30;
+  const highlightPct = deps.ratioChangePct ?? 10;
+
   try {
-    const alerts = [];
+    console.log(`\n  📤 聪明钱全池扫描 (${watchSymbols.size} 个)...`);
+    const rows = [];
+    let failed = 0;
+
     for (const sym of watchSymbols) {
       try {
-        const r = await scanSymbol(sym, { force });
-        if (r) alerts.push(r);
+        rows.push(await scanSymbolForDigest(sym));
       } catch (e) {
-        console.warn(`  ⚠ 聪明钱趋势扫描 ${sym} 失败: ${e.message}`);
+        failed += 1;
+        console.warn(`  ⚠ 聪明钱扫描 ${sym} 失败: ${e.message}`);
       }
     }
 
-    if (!alerts.length) {
-      console.log(`  ✓ 聪明钱趋势扫描: ${watchSymbols.size} 个监控币种，无新变化`);
+    if (!rows.length) {
+      console.warn(`  ⚠ 聪明钱全池扫描: 全部失败，跳过推送`);
       return;
     }
 
-    const intervalMin = deps.intervalMin ?? 30;
-    const cooldownMin = deps.cooldownMin ?? 30;
-    const ratioChangePct = deps.ratioChangePct ?? 10;
-    const elements = buildSmartTrendAlertElements(alerts, { intervalMin, cooldownMin, ratioChangePct });
-    const labels = alerts.map(a => a.label).join('/');
-    const title = alerts.length === 1
-      ? `${alerts[0].recommendationEmoji} ${alerts[0].trendLabel} · ${alerts[0].label} · ${alerts[0].recommendation}`
-      : `📊 聪明钱变化 · ${labels}`;
+    const enriched = deps.batchEnrichDigest
+      ? await deps.batchEnrichDigest(rows).catch(() => rows)
+      : rows;
 
-    const template = alerts.some(a => a.recommendationAction === 'short') ? 'red' : 'green';
-    await deps.sendFeishuCard(title, elements, template);
-    console.log(`  ✓ 聪明钱趋势推送 (${alerts.map(a => `${a.label}:${a.recommendation}[${a.confidence}]`).join(', ')})`);
+    enriched.sort((a, b) => {
+      const da = Math.abs(a.ratioDeltaPct ?? 0);
+      const db = Math.abs(b.ratioDeltaPct ?? 0);
+      return db - da || (b.ratio ?? 0) - (a.ratio ?? 0);
+    });
+
+    const bigCount = enriched.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+    const elements = buildSmartTrendDigestElements(enriched, {
+      intervalMin,
+      highlightPct,
+      totalCount: watchSymbols.size,
+    });
+
+    const title = bigCount > 0
+      ? `📊 聪明钱快照 · ${watchSymbols.size}币 · ${bigCount}个显著变化`
+      : `📊 聪明钱快照 · ${watchSymbols.size}币 · 全池一览`;
+
+    await deps.sendFeishuCard(title, elements, bigCount > 0 ? 'blue' : 'grey');
+    console.log(`  ✓ 聪明钱全池推送: ${enriched.length} 个币种 · ${bigCount} 个≥${highlightPct}%变化${failed ? ` · ${failed} 失败` : ''}`);
   } catch (e) {
-    console.warn(`  ⚠ 聪明钱趋势推送失败: ${e.message}`);
+    console.warn(`  ⚠ 聪明钱全池推送失败: ${e.message}`);
   } finally {
     running = false;
   }
@@ -429,18 +289,26 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
 export function startSmartTrendScheduler() {
   if (!deps?.enabled) return;
+  if (digestTimer) clearTimeout(digestTimer);
 
   const intervalMin = deps.intervalMin ?? 30;
-  const cooldownMin = deps.cooldownMin ?? 30;
-  const ratioChangePct = deps.ratioChangePct ?? 10;
   const syms = [...(resolveWatchSymbols() || [])];
   const watchLabel = syms.length > 10
     ? `${syms.slice(0, 10).map(s => s.replace(/USDT$/, '')).join(', ')} 等 ${syms.length} 个`
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
-  console.log(`  📊 聪明钱变化推送（唯一启用）: 每 ${intervalMin} 分钟 · 净多空比≥${ratioChangePct}% + 趋势/费率综合判定 · 监控 ${watchLabel || '（池为空）'}（${cooldownMin}min 去重）`);
+  console.log(`  📊 聪明钱全池推送: 上海时间每整点/半点 · ${intervalMin}min · 监控 ${watchLabel || '（池为空）'} · 仅展示变化不含买卖建议`);
 
-  const ms = intervalMin * 60 * 1000;
-  setInterval(() => runSmartTrendPush(), ms);
-  setTimeout(() => runSmartTrendPush(), 120_000);
+  const scheduleNext = () => {
+    const next = getNextHalfHourShanghai();
+    const delay = Math.max(0, next.getTime() - Date.now());
+    const label = next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    console.log(`  ⏭ 聪明钱下次推送: ${label}（${Math.round(delay / 60000)} 分钟后）`);
+    digestTimer = setTimeout(async () => {
+      await runSmartTrendPush();
+      scheduleNext();
+    }, delay);
+  };
+
+  scheduleNext();
 }
