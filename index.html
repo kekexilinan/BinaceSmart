@@ -2101,9 +2101,19 @@ async function renderCharts(data) {
   } catch {}
 
   const whalePoints = whaleHist.points || [];
+  const latestWhale = whalePoints.length ? whalePoints[whalePoints.length - 1] : null;
   const whaleMeta = whalePoints.length > 0
-    ? `${whalePoints.length} 个采样点 · 每 ${whaleHist.collectorIntervalMin || 5} 分钟采集 · 累计 ${whaleHist.totalPoints || whalePoints.length} 点`
-    : '暂无历史 · 服务每 5 分钟自动采集 Smart Signal 鲸鱼数据';
+    ? `${whalePoints.length} 个采样点 · 每 ${whaleHist.collectorIntervalMin || 5} 分钟采集 · 累计 ${whaleHist.totalPoints || whalePoints.length} 点 · 数据已本地缓存`
+    : '暂无历史 · 服务每 5 分钟自动采集 Smart Signal 鲸鱼数据（切换币种后自动加入采集）';
+
+  const whaleSingleSummary = latestWhale && whalePoints.length === 1
+    ? `<div style="padding:12px 0;font-size:13px;line-height:1.8;color:var(--text2);">
+        已有 1 个缓存点（${ts2time(latestWhale.ts)}）· 再采集 1 次后可显示趋势折线<br>
+        净多空比 <strong style="color:var(--text)">${latestWhale.longShortRatio?.toFixed(4) ?? '--'}</strong>
+        · 鲸鱼仓位比 <strong style="color:var(--text)">${latestWhale.whaleRatio?.toFixed(4) ?? '--'}</strong>
+        · 盈利鲸鱼 多${latestWhale.longProfitWhales ?? '--'}/空${latestWhale.shortProfitWhales ?? '--'}
+      </div>`
+    : '';
 
   const chartsEl = document.getElementById('charts');
   chartsEl.innerHTML = `
@@ -2111,7 +2121,7 @@ async function renderCharts(data) {
       <h3>鲸鱼 Smart Signal 多空趋势 <span style="font-size:11px;font-weight:400;color:var(--text2);">${whaleMeta}</span></h3>
       ${whalePoints.length >= 2
         ? '<canvas id="c-whale-trend" class="chart-tall"></canvas>'
-        : '<div id="c-whale-trend-empty" style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px;">数据采集中，请保持服务运行一段时间后查看折线图（切换币种后会自动加入采集列表）</div>'}
+        : whaleSingleSummary || '<div id="c-whale-trend-empty" style="height:120px;display:flex;align-items:center;justify-content:center;color:var(--text2);font-size:13px;">数据采集中，请保持服务运行一段时间后查看折线图（切换币种后会自动加入采集列表）</div>'}
     </div>
     <div class="chart-card">
       <h3>大户持仓多空比 (Top 20% 持仓维度) - 核心指标</h3>

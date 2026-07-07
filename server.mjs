@@ -22,6 +22,8 @@ import {
 import { evaluatePositionHealth, evaluatePositionsBatch } from './position-health.mjs';
 import { getUserPositions, addUserPosition, deleteUserPosition } from './user-positions.mjs';
 import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
+import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated } from './smart-trend-monitor.mjs';
+import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 
 const FETCH_TIMEOUT_MS = 15000;
 
@@ -341,9 +343,23 @@ const PUMP_GAINER_ENABLED = process.env.PUMP_GAINER_ALERT_ENABLED === 'true' && 
 
 const POSITION_HEALTH_ENABLED = process.env.POSITION_HEALTH_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const POSITION_HEALTH_PUSH_HOURS = parseFloat(process.env.POSITION_HEALTH_PUSH_HOURS || '2', 10);
-const POSITION_HEALTH_URGENT_CHECK_MIN = parseInt(process.env.POSITION_HEALTH_URGENT_CHECK_MIN || '15', 10);
+const POSITION_HEALTH_URGENT_CHECK_MIN = parseInt(process.env.POSITION_HEALTH_URGENT_CHECK_MIN || '30', 10);
+const POSITION_HEALTH_URGENT_COOLDOWN_MIN = parseInt(process.env.POSITION_HEALTH_URGENT_COOLDOWN_MIN || '60', 10);
 const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
   (process.env.POSITION_HEALTH_WATCH_SYMBOLS || 'LABUSDT')
+    .split(/[,，\s]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean)
+    .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
+);
+
+const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '30', 10);
+const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
+const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'false';
+const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
+const SMART_TREND_WATCH_SYMBOLS = new Set(
+  (process.env.SMART_TREND_WATCH_SYMBOLS || process.env.POSITION_HEALTH_WATCH_SYMBOLS || '')
     .split(/[,，\s]+/)
     .map(s => s.trim().toUpperCase())
     .filter(Boolean)
@@ -1682,6 +1698,37 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/smart-trend-watchlist') {
+    try {
+      const data = getWatchlistInfo();
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify(data));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-smart-trend-push' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    if (!FEISHU_WEBHOOK) {
+      res.writeHead(400, headers);
+      res.end(JSON.stringify({ ok: false, error: 'FEISHU_WEBHOOK 未配置' }));
+      return;
+    }
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发聪明钱趋势推送' }));
+    runSmartTrendPush({ force: true }).catch(e => console.warn(`  ⚠ 聪明钱趋势推送失败: ${e.message}`));
+    return;
+  }
+
+  if (url.pathname === '/api/trigger-smart-trend-push' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/scan-momentum') {
     const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '30', 10));
     const minScore = parseInt(url.searchParams.get('minScore') || '3', 10);
@@ -1775,11 +1822,33 @@ server.listen(PORT, () => {
     feishuEnabled: !!FEISHU_WEBHOOK,
     pushHours: POSITION_HEALTH_PUSH_HOURS,
     urgentCheckMin: POSITION_HEALTH_URGENT_CHECK_MIN,
+    urgentCooldownMin: POSITION_HEALTH_URGENT_COOLDOWN_MIN,
     watchSymbols: POSITION_HEALTH_WATCH_SYMBOLS,
     getNextPushTime: getNextStablePushTime,
     sendFeishu,
   });
   startPositionHealthScheduler();
+  initSmartTrendWatchlist({
+    enabled: SMART_TREND_ENABLED && SMART_TREND_DYNAMIC_WATCH,
+    topN: SMART_TREND_BOARD_TOP_N,
+    getGainersSince8am: handleGainersSince8am,
+    getLosersSince8am: handleLosersSince8am,
+    registerActiveSymbol,
+    onWatchlistUpdated,
+    fallbackSymbols: SMART_TREND_WATCH_SYMBOLS,
+  });
+  startSmartTrendWatchlistScheduler().then(() => initSmartTrendMonitor({
+    enabled: SMART_TREND_ENABLED,
+    feishuEnabled: !!FEISHU_WEBHOOK,
+    intervalMin: SMART_TREND_INTERVAL_MIN,
+    cooldownMin: SMART_TREND_COOLDOWN_MIN,
+    watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
+    getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
+    sendFeishuCard: sendFeishuCardV2,
+    getWhaleHistory,
+  })).then(() => startSmartTrendScheduler()).catch(e => {
+    console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
+  });
   startWhaleCollector().catch(e => {
     console.warn(`  ⚠ 鲸鱼历史采集启动失败: ${e.message}`);
   });
