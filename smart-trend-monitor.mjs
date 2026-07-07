@@ -178,13 +178,12 @@ async function scanSymbolForDigest(symbol) {
 function buildDigestTableRows(rows, highlightPct) {
   return rows.map(r => {
     const trend = changeTrendLabel(r, highlightPct);
-    const trendColor = trend === '变少' || trend === '微减' ? 'red' : trend === '变多' || trend === '微增' ? 'green' : 'grey';
     const ratioText = r.prevRatio != null
       ? `${r.prevRatio.toFixed(2)}→${r.ratio.toFixed(2)}`
       : r.ratio.toFixed(2);
     return {
       coin: `[${r.badge}] ${r.label}`,
-      trend: `<font color='${trendColor}'>${trend}</font>`,
+      chg30m: trend,
       ratio: ratioText,
       delta: ratioDeltaLabel(r.ratioDeltaPct),
       price: r.priceLabel ? `$${r.priceLabel}` : '-',
@@ -195,56 +194,41 @@ function buildDigestTableRows(rows, highlightPct) {
 }
 
 const DIGEST_TABLE_COLUMNS = [
-  { name: 'coin', display_name: '币种', data_type: 'text', width: '70px' },
-  { name: 'trend', display_name: '30min变化', data_type: 'lark_md', width: 'auto' },
+  { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'chg30m', display_name: '30min', data_type: 'text', width: 'auto' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
-  { name: 'delta', display_name: 'Δ%', data_type: 'text', width: 'auto' },
+  { name: 'delta', display_name: '变化%', data_type: 'text', width: 'auto' },
   { name: 'price', display_name: '价格', data_type: 'text', width: 'auto' },
   { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
-  { name: 'funding', display_name: '资金费率', data_type: 'text', width: 'auto' },
+  { name: 'funding', display_name: '费率', data_type: 'text', width: 'auto' },
 ];
 
-export function buildSmartTrendDigestElements(rows, { intervalMin = 30, highlightPct = 10, totalCount = 0, chunkSize = 30 } = {}) {
+export function buildSmartTrendDigestElements(rows, { intervalMin = 30, highlightPct = 10, totalCount = 0, chunkSize = 30, partIndex = 0, partTotal = 1 } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const bigMoves = rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct);
 
+  const partNote = partTotal > 1 ? ` · 第 ${partIndex + 1}/${partTotal} 部分` : '';
   const elements = [
     {
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**聪明钱全池快照** · 共 ${totalCount || rows.length} 个币种\n_每 ${intervalMin} 分钟整点/半点 · 30min 净多空比变化 · ≥${highlightPct}% 标变多/变少 · 不含买卖建议_`,
+      content: `**⏰ ${now}**${partNote}\n**聪明钱全池快照** · 本表 ${rows.length} 个币种 · 全池 ${totalCount || rows.length} 个\n_每 ${intervalMin} 分钟整点/半点 · ≥${highlightPct}% 标变多/变少 · 不含买卖建议_`,
     },
   ];
 
-  if (bigMoves.length > 0) {
+  if (partIndex === 0 && bigMoves.length > 0) {
     elements.push({
       tag: 'markdown',
       content: `**⚡ 显著变化（≥${highlightPct}%）:** ${bigMoves.map(r => `${r.label} ${ratioDeltaLabel(r.ratioDeltaPct)}`).join(' · ')}`,
     });
   }
 
-  const size = Math.max(10, chunkSize || 30);
-  const chunks = [];
-  for (let i = 0; i < rows.length; i += size) {
-    chunks.push(rows.slice(i, i + size));
-  }
-
-  chunks.forEach((chunk, idx) => {
-    const from = idx * size + 1;
-    const to = idx * size + chunk.length;
-    if (chunks.length > 1) {
-      elements.push({
-        tag: 'markdown',
-        content: `**📋 第 ${idx + 1}/${chunks.length} 部分** · 币种 ${from}–${to}（按 |Δ%| 排序）`,
-      });
-    }
-    elements.push({
-      tag: 'table',
-      page_size: 20,
-      row_height: 'low',
-      freeze_first_column: true,
-      columns: DIGEST_TABLE_COLUMNS,
-      rows: buildDigestTableRows(chunk, highlightPct),
-    });
+  elements.push({
+    tag: 'table',
+    page_size: 20,
+    row_height: 'low',
+    freeze_first_column: true,
+    columns: DIGEST_TABLE_COLUMNS,
+    rows: buildDigestTableRows(rows, highlightPct),
   });
 
   return elements;
@@ -290,20 +274,30 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
     const chunkSize = deps.digestChunkSize ?? 30;
     const bigCount = enriched.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
-    const elements = buildSmartTrendDigestElements(enriched, {
-      intervalMin,
-      highlightPct,
-      totalCount: watchSymbols.size,
-      chunkSize,
-    });
+    const chunks = [];
+    for (let i = 0; i < enriched.length; i += chunkSize) {
+      chunks.push(enriched.slice(i, i + chunkSize));
+    }
+    const partTotal = chunks.length;
 
-    const parts = Math.ceil(enriched.length / chunkSize);
-    const title = bigCount > 0
-      ? `📊 聪明钱快照 · ${watchSymbols.size}币 · ${bigCount}个显著变化${parts > 1 ? ` · ${parts}张表` : ''}`
-      : `📊 聪明钱快照 · ${watchSymbols.size}币${parts > 1 ? ` · ${parts}张表` : ''}`;
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i];
+      const elements = buildSmartTrendDigestElements(chunk, {
+        intervalMin,
+        highlightPct,
+        totalCount: watchSymbols.size,
+        chunkSize,
+        partIndex: i,
+        partTotal,
+      });
+      const partSuffix = partTotal > 1 ? ` (${i + 1}/${partTotal})` : '';
+      const title = bigCount > 0
+        ? `📊 聪明钱快照${partSuffix} · ${watchSymbols.size}币 · ${bigCount}个显著变化`
+        : `📊 聪明钱快照${partSuffix} · ${watchSymbols.size}币`;
+      await deps.sendFeishuCard(title, elements, bigCount > 0 ? 'blue' : 'grey');
+    }
 
-    await deps.sendFeishuCard(title, elements, bigCount > 0 ? 'blue' : 'grey');
-    console.log(`  ✓ 聪明钱全池推送: ${enriched.length} 个币种 · ${bigCount} 个≥${highlightPct}%变化${failed ? ` · ${failed} 失败` : ''}`);
+    console.log(`  ✓ 聪明钱全池推送: ${enriched.length} 个币种 · ${bigCount} 个≥${highlightPct}%变化 · ${partTotal} 条飞书${failed ? ` · ${failed} 扫描失败` : ''}`);
   } catch (e) {
     console.warn(`  ⚠ 聪明钱全池推送失败: ${e.message}`);
   } finally {

@@ -496,7 +496,11 @@ async function sendFeishuCardV2(title, elements, template = 'blue') {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  return res.json();
+  const data = await res.json();
+  if (data.code !== 0) {
+    throw new Error(`飞书卡片发送失败: ${data.msg || JSON.stringify(data)}`);
+  }
+  return data;
 }
 
 function formatStablePushContent(results) {
