@@ -135,6 +135,8 @@ function cooldownMs() {
 function detectTrend(prev, curr) {
   if (!prev?.initialized) return null;
 
+  const ratioThresholdPct = deps?.ratioChangePct ?? 10;
+
   // 方向翻转：净多空比由空转多 / 由多转空
   if (
     prev.direction !== curr.direction
@@ -144,11 +146,11 @@ function detectTrend(prev, curr) {
     return curr.direction === 'long' ? 'flip_long' : 'flip_short';
   }
 
-  // 严格按净多空比变化判定（阈值 3%）
+  // 严格按净多空比变化判定
   if (prev.ratio > 0) {
     const ratioDeltaPct = ((curr.ratio - prev.ratio) / prev.ratio) * 100;
-    if (ratioDeltaPct >= 3) return 'increase';
-    if (ratioDeltaPct <= -3) return 'decrease';
+    if (ratioDeltaPct >= ratioThresholdPct) return 'increase';
+    if (ratioDeltaPct <= -ratioThresholdPct) return 'decrease';
   }
 
   return null;
@@ -207,13 +209,13 @@ async function scanSymbol(symbol, { force = false } = {}) {
   };
 }
 
-export function buildSmartTrendAlertElements(alerts, { intervalMin = 30, cooldownMin = 60 } = {}) {
+export function buildSmartTrendAlertElements(alerts, { intervalMin = 30, cooldownMin = 30, ratioChangePct = 10 } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const watchLabel = alerts.map(a => a.label).join(', ');
   const elements = [
     {
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**聪明钱变化通知** · ${watchLabel}\n_严格按净多空比变化推送 · 比值升≥3%→做多 · 降≥3%→做空 · 每 ${intervalMin} 分钟扫描 · 同币种同方向 ${cooldownMin} 分钟最多 1 次_`,
+      content: `**⏰ ${now}**\n**聪明钱变化通知** · ${watchLabel}\n_净多空比变化≥${ratioChangePct}%才推送 · 每 ${intervalMin} 分钟扫描 · 同币种同方向 ${cooldownMin} 分钟最多 1 次_`,
     },
   ];
 
@@ -274,8 +276,9 @@ export async function runSmartTrendPush({ force = false } = {}) {
     }
 
     const intervalMin = deps.intervalMin ?? 30;
-    const cooldownMin = deps.cooldownMin ?? 60;
-    const elements = buildSmartTrendAlertElements(alerts, { intervalMin, cooldownMin });
+    const cooldownMin = deps.cooldownMin ?? 30;
+    const ratioChangePct = deps.ratioChangePct ?? 10;
+    const elements = buildSmartTrendAlertElements(alerts, { intervalMin, cooldownMin, ratioChangePct });
     const labels = alerts.map(a => a.label).join('/');
     const title = alerts.length === 1
       ? `${alerts[0].recommendationEmoji} ${alerts[0].trendLabel} · ${alerts[0].label} · ${alerts[0].recommendation}`
@@ -295,13 +298,14 @@ export function startSmartTrendScheduler() {
   if (!deps?.enabled) return;
 
   const intervalMin = deps.intervalMin ?? 30;
-  const cooldownMin = deps.cooldownMin ?? 60;
+  const cooldownMin = deps.cooldownMin ?? 30;
+  const ratioChangePct = deps.ratioChangePct ?? 10;
   const syms = [...(resolveWatchSymbols() || [])];
   const watchLabel = syms.length > 10
     ? `${syms.slice(0, 10).map(s => s.replace(/USDT$/, '')).join(', ')} 等 ${syms.length} 个`
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
-  console.log(`  📊 聪明钱变化推送（唯一启用）: 每 ${intervalMin} 分钟 · 净多空比升→做多 / 降→做空 · 监控 ${watchLabel || '（池为空）'}（${cooldownMin}min 去重）`);
+  console.log(`  📊 聪明钱变化推送（唯一启用）: 每 ${intervalMin} 分钟扫描 · 净多空比变化≥${ratioChangePct}%才推送 · 监控 ${watchLabel || '（池为空）'}（${cooldownMin}min 去重）`);
 
   const ms = intervalMin * 60 * 1000;
   setInterval(() => runSmartTrendPush(), ms);

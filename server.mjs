@@ -355,7 +355,8 @@ const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
 
 const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
 const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '30', 10);
-const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
+const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '30', 10);
+const SMART_TREND_RATIO_CHANGE_PCT = parseFloat(process.env.SMART_TREND_RATIO_CHANGE_PCT || '10', 10);
 const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'false';
 const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
 const SMART_TREND_WATCH_SYMBOLS = new Set(
@@ -1842,6 +1843,7 @@ server.listen(PORT, () => {
     feishuEnabled: !!FEISHU_WEBHOOK,
     intervalMin: SMART_TREND_INTERVAL_MIN,
     cooldownMin: SMART_TREND_COOLDOWN_MIN,
+    ratioChangePct: SMART_TREND_RATIO_CHANGE_PCT,
     watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     sendFeishuCard: sendFeishuCardV2,
