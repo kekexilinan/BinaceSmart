@@ -249,6 +249,7 @@ async function batchEnrichSmartTrendDigest(rows) {
       ...r,
       price,
       change8am,
+      fundingRate: fr,
       priceLabel: fmtPrice(price),
       marketCapLabel: fmtMarketCap(mcMap[r.symbol]),
       fundingRateLabel: `${(fr * 100).toFixed(4)}%`,
@@ -1660,7 +1661,7 @@ const server = createServer(async (req, res) => {
     try {
       const raw = await fetchSmartSignal(symbol);
       const analysis = analyzeSmartSignal(raw, price);
-      recordWhaleSnapshot(symbol, raw, price).catch(() => {});
+      registerActiveSymbol(symbol);
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ symbol, raw, ...analysis }));
     } catch (e) {
@@ -1941,6 +1942,7 @@ server.listen(PORT, () => {
     getLosersSince8am: handleLosersSince8am,
     registerActiveSymbol,
     onWatchlistUpdated,
+    extraSymbols: SMART_TREND_WATCH_SYMBOLS,
     fallbackSymbols: SMART_TREND_WATCH_SYMBOLS,
   });
   startSmartTrendWatchlistScheduler().then(() => initSmartTrendMonitor({

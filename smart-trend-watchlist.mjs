@@ -18,6 +18,23 @@ let gainerList = [];
 let loserList = [];
 let lastRefreshDateKey = null;
 let refreshTimer = null;
+/** @type {Set<string>} */
+let pinnedSymbols = new Set();
+
+function resolvePinnedSet() {
+  const raw = deps?.extraSymbols;
+  if (!raw) return new Set();
+  if (raw instanceof Set) return new Set([...raw].map(s => s.toUpperCase()));
+  return new Set(raw.map(s => String(s).toUpperCase()));
+}
+
+function applyPinnedToWatch() {
+  pinnedSymbols = resolvePinnedSet();
+  for (const sym of pinnedSymbols) {
+    watchSymbols.add(sym);
+    deps?.registerActiveSymbol?.(sym);
+  }
+}
 
 function getShanghaiParts(date = new Date()) {
   const parts = {};
@@ -50,6 +67,7 @@ function getNext8amShanghai(now = new Date()) {
 }
 
 export function getWatchSymbols() {
+  applyPinnedToWatch();
   return watchSymbols;
 }
 
@@ -66,11 +84,13 @@ export function getWatchlistInfo() {
 }
 
 export function getWatchlistGroups() {
+  applyPinnedToWatch();
   return {
     dateKey: lastRefreshDateKey,
     topN: deps?.topN ?? 20,
     gainers: gainerList,
     losers: loserList,
+    pinned: [...pinnedSymbols],
   };
 }
 
@@ -120,6 +140,7 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
 
   const dateKey = getBaseline8amDateKey();
   if (!force && lastRefreshDateKey === dateKey && watchSymbols.size > 0) {
+    applyPinnedToWatch();
     return { symbols: [...watchSymbols], skipped: true, dateKey };
   }
 
@@ -140,10 +161,7 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
   lastRefreshDateKey = gainers.meta?.baselineDate || dateKey;
   gainerList = gainers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
   loserList = losers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
-
-  for (const sym of watchSymbols) {
-    deps.registerActiveSymbol?.(sym);
-  }
+  applyPinnedToWatch();
 
   deps.onWatchlistUpdated?.([...watchSymbols], prevSymbols);
 
@@ -154,7 +172,8 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
 
   const labels = [...watchSymbols].slice(0, 12).map(s => s.replace(/USDT$/, '')).join(', ');
   const suffix = watchSymbols.size > 12 ? ` 等 ${watchSymbols.size} 个` : '';
-  console.log(`  📋 聪明钱监控池已更新 (${lastRefreshDateKey} 8点榜 Top${topN}+Top${topN}): ${labels}${suffix}`);
+  const pinNote = pinnedSymbols.size ? ` · 固定 ${[...pinnedSymbols].map(s => s.replace(/USDT$/, '')).join(',')}` : '';
+  console.log(`  📋 聪明钱监控池已更新 (${lastRefreshDateKey} 8点榜 Top${topN}+Top${topN}${pinNote}): ${labels}${suffix}`);
 
   return {
     symbols: [...watchSymbols],
@@ -189,6 +208,7 @@ export async function startSmartTrendWatchlistScheduler() {
   if (!deps?.enabled) return;
 
   await loadPersistedWatchlist();
+  applyPinnedToWatch();
   try {
     await refreshSmartTrendWatchlist();
   } catch (e) {
@@ -201,6 +221,7 @@ export async function startSmartTrendWatchlistScheduler() {
   }
 
   const topN = deps.topN ?? 20;
-  console.log(`  📋 聪明钱动态监控池: 8点涨幅榜 Top${topN} + 跌幅榜 Top${topN} · 每日 08:00 上海刷新 · 当前 ${watchSymbols.size} 个`);
+  const pinNote = pinnedSymbols.size ? ` + 固定 ${[...pinnedSymbols].map(s => s.replace(/USDT$/, '')).join(',')}` : '';
+  console.log(`  📋 聪明钱动态监控池: 8点涨幅榜 Top${topN} + 跌幅榜 Top${topN}${pinNote} · 每日 08:00 上海刷新 · 当前 ${watchSymbols.size} 个`);
   scheduleNextRefresh();
 }

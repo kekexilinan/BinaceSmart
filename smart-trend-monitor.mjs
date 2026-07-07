@@ -190,6 +190,7 @@ async function scanSymbolForDigest(symbol) {
     : null;
 
   lastState.set(sym, {
+    ...(prev || {}),
     score: analysis.score,
     direction: analysis.direction,
     ratio: analysis.ratio,
@@ -209,6 +210,72 @@ async function scanSymbolForDigest(symbol) {
   };
 }
 
+function fmtDigestPrice(p) {
+  if (!p || p <= 0) return '-';
+  if (p >= 1000) return p.toFixed(1);
+  if (p >= 1) return p.toFixed(2);
+  if (p >= 0.01) return p.toFixed(4);
+  return p.toPrecision(3);
+}
+
+function priceChangeLabel(prev, cur) {
+  if (!cur || cur <= 0) return '-';
+  const curStr = fmtDigestPrice(cur);
+  if (prev != null && prev > 0) return `${fmtDigestPrice(prev)}→${curStr}`;
+  return curStr;
+}
+
+function fundingChangeLabel(prev, cur) {
+  const fmt = (v) => (v * 100).toFixed(2);
+  if (cur == null || Number.isNaN(cur)) return '-';
+  if (prev != null && !Number.isNaN(prev)) return `${fmt(prev)}→${fmt(cur)}`;
+  return fmt(cur);
+}
+
+function finalizeMarketState(rows) {
+  for (const r of rows) {
+    const cur = lastState.get(r.symbol) || {};
+    r.prevPrice = cur.initialized && cur.price > 0 ? cur.price : null;
+    r.prevFundingRate = cur.initialized && cur.fundingRate != null ? cur.fundingRate : null;
+    if (r.fundingRate != null && r.prevFundingRate != null) {
+      const diff = r.fundingRate - r.prevFundingRate;
+      r.fundingDeltaPct = r.prevFundingRate !== 0
+        ? (diff / Math.abs(r.prevFundingRate)) * 100
+        : (diff * 10000);
+    }
+    lastState.set(r.symbol, {
+      ...cur,
+      price: r.price > 0 ? r.price : cur.price ?? null,
+      fundingRate: r.fundingRate ?? cur.fundingRate ?? null,
+    });
+  }
+  queueSaveState();
+  return rows;
+}
+
+function mergeBoardLists(gainers, losers, pinned, enrichedMap) {
+  const gSet = new Set(gainers.map(g => g.symbol.toUpperCase()));
+  const lSet = new Set(losers.map(l => l.symbol.toUpperCase()));
+  const gOut = [...gainers];
+  const lOut = [...losers];
+  for (const sym of pinned || []) {
+    const upper = sym.toUpperCase();
+    if (gSet.has(upper) || lSet.has(upper)) continue;
+    const row = enrichedMap.get(upper);
+    if (!row) continue;
+    const change = row.change8am ?? 0;
+    const entry = { symbol: upper, change, pinned: true };
+    if (change >= 0) {
+      gOut.push(entry);
+      gSet.add(upper);
+    } else {
+      lOut.push(entry);
+      lSet.add(upper);
+    }
+  }
+  return { gainers: gOut, losers: lOut };
+}
+
 function buildDigestTableRows(rows, highlightPct) {
   return rows.map(r => {
     const trend = changeTrendLabel(r, highlightPct);
@@ -219,15 +286,15 @@ function buildDigestTableRows(rows, highlightPct) {
       ? `${r.change8am >= 0 ? '+' : ''}${r.change8am.toFixed(1)}%`
       : '-';
     return {
-      coin: `[${r.badge}] ${r.label}`,
+      coin: `${r.pinned ? '📌 ' : ''}[${r.badge}] ${r.label}`,
       chg8am: chg8,
       chg30m: trend,
       ratio: ratioText,
       delta: ratioDeltaDisplay(r.ratioDeltaPct, highlightPct),
       hint: tradeHintLabel(r.ratioDeltaPct, highlightPct),
-      price: r.priceLabel ? `$${r.priceLabel}` : '-',
+      price: priceChangeLabel(r.prevPrice, r.price),
       mc: r.marketCapLabel || '-',
-      funding: r.fundingRateLabel || '-',
+      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate),
     };
   });
 }
@@ -239,9 +306,9 @@ const DIGEST_TABLE_COLUMNS = [
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
   { name: 'delta', display_name: '变化%', data_type: 'text', width: 'auto' },
   { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
-  { name: 'price', display_name: '价格', data_type: 'text', width: 'auto' },
+  { name: 'price', display_name: '价格Δ', data_type: 'text', width: 'auto' },
   { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
-  { name: 'funding', display_name: '费率', data_type: 'text', width: 'auto' },
+  { name: 'funding', display_name: '费率Δ', data_type: 'text', width: 'auto' },
 ];
 
 /** 涨幅榜 / 跌幅榜 单张卡片（表格内置分页） */
@@ -261,7 +328,7 @@ export function buildBoardDigestElements(rows, {
   const elements = [
     {
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**${boardLabel}** · Top${topN} · ${rows.length} 个币种${dateKey ? ` · ${dateKey} 8点基准` : ''}\n_按聪明钱变化幅度排序 · ⚡≥5% · 🔥≥${highlightPct}% · 表格可翻页 · 参考列仅供研判_`,
+      content: `**⏰ ${now}**\n**${boardLabel}** · Top${topN} · ${rows.length} 个币种${dateKey ? ` · ${dateKey} 8点基准` : ''}\n_按聪明钱变化幅度排序 · 价格/费率显示上次→本次(约${intervalMin}min) · ⚡≥5% · 🔥≥${highlightPct}% · 参考列仅供研判_`,
     },
   ];
 
@@ -321,25 +388,33 @@ export async function runSmartTrendPush({ force = false } = {}) {
     const enriched = deps.batchEnrichDigest
       ? await deps.batchEnrichDigest(allRows).catch(() => allRows)
       : allRows;
+    finalizeMarketState(enriched);
     const enrichedMap = new Map(enriched.map(r => [r.symbol, r]));
 
     const buildBoardRows = (boardList, tieBreakFn) => sortByRatioChange(
       boardList
-        .map(({ symbol, change }) => {
+        .map(({ symbol, change, pinned = false }) => {
           const row = enrichedMap.get(symbol.toUpperCase());
           if (!row) return null;
-          return { ...row, change8am: row.change8am ?? change };
+          return { ...row, change8am: row.change8am ?? change, pinned };
         })
         .filter(Boolean),
       tieBreakFn,
     );
 
-    const gainerRows = buildBoardRows(
+    const merged = mergeBoardLists(
       groups.gainers || [],
+      groups.losers || [],
+      groups.pinned || [],
+      enrichedMap,
+    );
+
+    const gainerRows = buildBoardRows(
+      merged.gainers,
       (a, b) => (b.change8am ?? 0) - (a.change8am ?? 0),
     );
     const loserRows = buildBoardRows(
-      groups.losers || [],
+      merged.losers,
       (a, b) => (a.change8am ?? 0) - (b.change8am ?? 0),
     );
 

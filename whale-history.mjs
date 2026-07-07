@@ -9,16 +9,23 @@ const HISTORY_FILE = join(DATA_DIR, 'whale-history.json');
 
 const INTERVAL_MS = parseInt(process.env.WHALE_HISTORY_INTERVAL_MIN || '5', 10) * 60 * 1000;
 const MAX_POINTS = parseInt(process.env.WHALE_HISTORY_MAX_POINTS || '2016', 10);
-const MIN_RECORD_GAP_MS = parseInt(process.env.WHALE_HISTORY_MIN_GAP_MIN || '4', 10) * 60 * 1000;
+const MIN_RECORD_GAP_MS = parseInt(process.env.WHALE_HISTORY_MIN_GAP_MIN || '1', 10) * 60 * 1000;
 const DEFAULT_SYMBOLS = (process.env.WHALE_HISTORY_SYMBOLS || 'SLXUSDT')
   .split(',')
   .map(s => s.trim().toUpperCase())
   .filter(Boolean);
 
 let history = {};
+let historyReady = false;
 let saveQueue = Promise.resolve();
 let activeSymbols = new Set(DEFAULT_SYMBOLS);
 let collectorTimer = null;
+
+async function ensureHistoryLoaded() {
+  if (historyReady) return;
+  history = await readHistoryFile();
+  historyReady = true;
+}
 
 async function readHistoryFile() {
   try {
@@ -28,10 +35,6 @@ async function readHistoryFile() {
   } catch {
     return {};
   }
-}
-
-async function loadHistory() {
-  history = await readHistoryFile();
 }
 
 function queueSave() {
@@ -66,7 +69,7 @@ export function registerActiveSymbol(symbol) {
 
 export async function recordWhaleSnapshot(symbol, raw, price = null) {
   if (!raw) return null;
-  await loadHistory();
+  await ensureHistoryLoaded();
 
   const sym = symbol.toUpperCase();
   registerActiveSymbol(sym);
@@ -87,21 +90,11 @@ export async function recordWhaleSnapshot(symbol, raw, price = null) {
 }
 
 export async function getWhaleHistory(symbol, hours = 72) {
-  const fileHistory = await readHistoryFile();
-  const memHistory = history;
-  const merged = { ...fileHistory };
-  for (const [sym, points] of Object.entries(memHistory)) {
-    if (!merged[sym]?.length) merged[sym] = points;
-    else if (points.length) {
-      const lastMem = points[points.length - 1]?.ts || 0;
-      const lastFile = merged[sym][merged[sym].length - 1]?.ts || 0;
-      merged[sym] = lastMem >= lastFile ? points : merged[sym];
-    }
-  }
-  history = merged;
+  await saveQueue;
+  await ensureHistoryLoaded();
 
   const sym = symbol.toUpperCase();
-  const arr = merged[sym] || [];
+  const arr = history[sym] || [];
   const h = Math.max(1, parseInt(hours, 10) || 72);
   const cutoff = Date.now() - h * 3600 * 1000;
   return {
@@ -113,11 +106,11 @@ export async function getWhaleHistory(symbol, hours = 72) {
 }
 
 export async function startWhaleCollector() {
-  await loadHistory();
-
   if (collectorTimer) return;
+  await ensureHistoryLoaded();
 
   async function tick() {
+    await ensureHistoryLoaded();
     for (const sym of [...activeSymbols]) {
       try {
         const raw = await fetchSmartSignal(sym);
@@ -126,6 +119,7 @@ export async function startWhaleCollector() {
         console.warn(`  ⚠ 鲸鱼历史采集 ${sym} 失败: ${e.message}`);
       }
     }
+    await saveQueue;
   }
 
   setTimeout(tick, 15000);
