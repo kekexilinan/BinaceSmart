@@ -218,6 +218,68 @@ async function handleLosersSince8am(limit) {
   };
 }
 
+async function fetchSmartTrendContext(symbol, priceHint = null) {
+  const sym = symbol.toUpperCase();
+  const [premiumRes, topPosRes, takerRes, klinesRes, mcMap] = await Promise.all([
+    proxyBinance(`/fapi/v1/premiumIndex?symbol=${sym}`).catch(() => null),
+    proxyBinance(`/futures/data/topLongShortPositionRatio?symbol=${sym}&period=1h&limit=5`).catch(() => []),
+    proxyBinance(`/futures/data/takerlongshortRatio?symbol=${sym}&period=5m&limit=6`).catch(() => []),
+    proxyBinance(`/fapi/v1/klines?symbol=${sym}&interval=1h&limit=30`).catch(() => []),
+    batchFetchMarketCaps([sym]).catch(() => ({})),
+  ]);
+
+  let price = parseFloat(priceHint) || 0;
+  if (!price) {
+    try {
+      const p = await proxyBinance(`/fapi/v2/ticker/price?symbol=${sym}`);
+      price = parseFloat(p?.price) || 0;
+    } catch {}
+  }
+
+  const change8amInfo = price > 0 ? await getChangeSince8am(sym, price).catch(() => null) : null;
+  const fundingRate = parseFloat(premiumRes?.lastFundingRate) || 0;
+
+  const topPos = Array.isArray(topPosRes) ? topPosRes : [];
+  let topPosTrend = 0;
+  if (topPos.length >= 2) {
+    topPosTrend = parseFloat(topPos[topPos.length - 1].longShortRatio) - parseFloat(topPos[0].longShortRatio);
+  }
+
+  const taker = Array.isArray(takerRes) ? takerRes : [];
+  let takerTrend = 0;
+  if (taker.length >= 2) {
+    takerTrend = parseFloat(taker[taker.length - 1].buySellRatio) - parseFloat(taker[0].buySellRatio);
+  }
+
+  let maTrend = 'neutral';
+  const klines = Array.isArray(klinesRes) ? klinesRes : [];
+  if (klines.length >= 20) {
+    const closes = klines.map(k => parseFloat(k[4]));
+    const ma20 = closes.slice(-20).reduce((a, b) => a + b, 0) / 20;
+    const ma60 = closes.length >= 60
+      ? closes.slice(-60).reduce((a, b) => a + b, 0) / 60
+      : closes.reduce((a, b) => a + b, 0) / closes.length;
+    const last = closes[closes.length - 1];
+    if (last > ma20 && ma20 >= ma60 * 0.998) maTrend = 'bull';
+    else if (last < ma20 && ma20 <= ma60 * 1.002) maTrend = 'bear';
+  }
+
+  const marketCap = mcMap[sym] || 0;
+
+  return {
+    price,
+    priceLabel: fmtPrice(price),
+    marketCap,
+    marketCapLabel: fmtMarketCap(marketCap),
+    fundingRate,
+    fundingRateLabel: `${(fundingRate * 100).toFixed(4)}%`,
+    change8am: change8amInfo?.change ?? null,
+    maTrend,
+    topPosTrend,
+    takerTrend,
+  };
+}
+
 async function fetchCurrentPrices(symbols) {
   if (!symbols.length) return {};
   const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
@@ -1848,6 +1910,7 @@ server.listen(PORT, () => {
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     sendFeishuCard: sendFeishuCardV2,
     getWhaleHistory,
+    fetchMarketContext: fetchSmartTrendContext,
   })).then(() => startSmartTrendScheduler()).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
   });
