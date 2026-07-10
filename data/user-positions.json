@@ -1,0 +1,52 @@
+[
+  {
+    "id": "47ecc19e-9f7e-426c-a67c-765ea6fc5f1a",
+    "symbol": "LABUSDT",
+    "direction": "short",
+    "entryPrice": 9.5,
+    "stopLoss": null,
+    "takeProfit": null,
+    "note": "",
+    "createdAt": 1783228014084
+  },
+  {
+    "id": "2d0f097d-1761-4e13-94c0-c6cad53f38b0",
+    "symbol": "BTWUSDT",
+    "direction": "long",
+    "entryPrice": 0.075,
+    "stopLoss": null,
+    "takeProfit": null,
+    "note": "",
+    "createdAt": 1783261915624
+  },
+  {
+    "id": "787e37a8-1ba9-482e-8142-0c4434988a39",
+    "symbol": "PLAYUSDT",
+    "direction": "long",
+    "entryPrice": 0.051,
+    "stopLoss": null,
+    "takeProfit": null,
+    "note": "",
+    "createdAt": 1783261978375
+  },
+  {
+    "id": "3327c401-d57b-440c-b52a-13854323515b",
+    "symbol": "VELVETUSDT",
+    "direction": "long",
+    "entryPrice": 0.95,
+    "stopLoss": null,
+    "takeProfit": null,
+    "note": "",
+    "createdAt": 1783262011223
+  },
+  {
+    "id": "908b9534-ec94-4d8a-8721-8a91fa4231eb",
+    "symbol": "AIGENSYNUSDT",
+    "direction": "long",
+    "entryPrice": 0.03945,
+    "stopLoss": null,
+    "takeProfit": null,
+    "note": "",
+    "createdAt": 1783262049665
+  }
+]

@@ -1,5 +1,5 @@
 /**
- * 聪明钱监控 · 每 30 分钟整点推送全池变化摘要（含变化幅度排序与做多/做空参考）
+ * 聪明钱监控 · 每 1 小时整点推送全池变化摘要（推送全部币种，≥10% 仅用于显著变化高亮，含资金费变化）
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -10,12 +10,15 @@ import { registerActiveSymbol } from './whale-history.mjs';
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const STATE_FILE = join(DATA_DIR, 'smart-trend-state.json');
+const MOCK_PUSH_FILE = join(DATA_DIR, 'smart-trend-push-mock.json');
 
 let deps = null;
 let running = false;
 let digestTimer = null;
-/** @type {Map<string, { score: number, direction: string, ratio: number, initialized: boolean }>} */
+/** @type {Map<string, object>} */
 const lastState = new Map();
+/** @type {{ last8amCaptureDateKey?: string }} */
+let stateMeta = {};
 let saveQueue = Promise.resolve();
 
 function getShanghaiParts(date = new Date()) {
@@ -29,14 +32,14 @@ function getShanghaiParts(date = new Date()) {
   return parts;
 }
 
-export function getNextHalfHourShanghai(now = new Date()) {
+export function getNextHourShanghai(now = new Date()) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
   const hour = parseInt(p.hour, 10);
   const minute = parseInt(p.minute, 10);
 
-  if (minute < 30) {
-    return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:30:00+08:00`);
+  if (minute === 0) {
+    return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`);
   }
   const nextHour = hour + 1;
   if (nextHour < 24) {
@@ -99,7 +102,11 @@ async function loadPersistedState() {
   try {
     const raw = await readFile(STATE_FILE, 'utf8');
     const obj = JSON.parse(raw);
+    if (obj._meta && typeof obj._meta === 'object') {
+      stateMeta = obj._meta;
+    }
     for (const [sym, state] of Object.entries(obj)) {
+      if (sym === '_meta') continue;
       if (state && typeof state === 'object') {
         lastState.set(sym.toUpperCase(), state);
       }
@@ -112,7 +119,7 @@ async function loadPersistedState() {
 function queueSaveState() {
   saveQueue = saveQueue.then(async () => {
     await mkdir(DATA_DIR, { recursive: true });
-    await writeFile(STATE_FILE, JSON.stringify(Object.fromEntries(lastState)), 'utf8');
+    await writeFile(STATE_FILE, JSON.stringify({ _meta: stateMeta, ...Object.fromEntries(lastState) }), 'utf8');
   }).catch(() => {});
 }
 
@@ -177,6 +184,144 @@ export async function initSmartTrendMonitor(dependencies) {
   }
 }
 
+function getBaseline8amDateKey(now = new Date()) {
+  const p = getShanghaiParts(now);
+  const hour = parseInt(p.hour, 10);
+  let base = new Date(`${p.year}-${p.month}-${p.day}T08:00:00+08:00`);
+  if (hour < 8) base.setDate(base.getDate() - 1);
+  const bp = getShanghaiParts(base);
+  return `${bp.year}-${bp.month}-${bp.day}`;
+}
+
+function getRatio8amOpenTime(now = new Date()) {
+  const p = getShanghaiParts(now);
+  const hour = parseInt(p.hour, 10);
+  let base = new Date(`${p.year}-${p.month}-${p.day}T08:00:00+08:00`);
+  if (hour < 8) base.setDate(base.getDate() - 1);
+  return base.getTime();
+}
+
+function findRatioNear8am(points, openTime) {
+  const window = (points || []).filter(p => p.ts >= openTime - 45 * 60000 && p.ts <= openTime + 120 * 60000);
+  if (!window.length) return null;
+  const closest = window.reduce((a, b) => (Math.abs(a.ts - openTime) < Math.abs(b.ts - openTime) ? a : b));
+  const ratio = closest.longShortRatio;
+  return ratio > 0 ? ratio : null;
+}
+
+function ensureRatio8amBaseline(row, dateKey, whaleBulk, openTime) {
+  const prev = lastState.get(row.symbol) || {};
+  if (prev.ratio8amDateKey === dateKey && prev.ratio8am > 0) {
+    return prev.ratio8am;
+  }
+
+  let ratio8am = null;
+  let source = 'startup';
+
+  if (stateMeta.last8amCaptureDateKey === dateKey) {
+    ratio8am = findRatioNear8am(whaleBulk[row.symbol], openTime);
+    if (ratio8am) source = 'whale';
+  }
+
+  if (!ratio8am && row.ratio > 0) {
+    ratio8am = row.ratio;
+    source = 'startup';
+  }
+
+  if (ratio8am) {
+    lastState.set(row.symbol, {
+      ...prev,
+      ratio8am,
+      ratio8amDateKey: dateKey,
+      ratio8amSource: source,
+      longHints8am: prev.hintCountDateKey === dateKey ? (prev.longHints8am || 0) : 0,
+      shortHints8am: prev.hintCountDateKey === dateKey ? (prev.shortHints8am || 0) : 0,
+      hintCountDateKey: dateKey,
+    });
+  }
+  return ratio8am;
+}
+
+async function attachRatio8amDeltas(rows) {
+  if (!rows.length) return rows;
+  const dateKey = getBaseline8amDateKey();
+  const openTime = getRatio8amOpenTime();
+  const symbols = rows.map(r => r.symbol);
+  const whaleBulk = deps?.getWhaleHistoryBulk
+    ? await deps.getWhaleHistoryBulk(symbols, 24).catch(() => ({}))
+    : {};
+
+  for (const row of rows) {
+    const ratio8am = ensureRatio8amBaseline(row, dateKey, whaleBulk, openTime);
+    row.ratio8am = ratio8am;
+    row.ratio8amDeltaPct = ratio8am && ratio8am > 0
+      ? ((row.ratio - ratio8am) / ratio8am) * 100
+      : null;
+  }
+  queueSaveState();
+  return rows;
+}
+
+function hintSideFromDelta(pct) {
+  if (pct == null || Number.isNaN(pct)) return null;
+  if (pct >= RATIO_WARN_PCT) return 'long';
+  if (pct <= -RATIO_WARN_PCT) return 'short';
+  return null;
+}
+
+function formatHints8am(longC, shortC) {
+  if (!longC && !shortC) return '-';
+  const parts = [];
+  if (longC) parts.push(`多${longC}`);
+  if (shortC) parts.push(`空${shortC}`);
+  return parts.join('/');
+}
+
+function recordHints8amCounts(rows) {
+  const dateKey = getBaseline8amDateKey();
+  for (const row of rows) {
+    const prev = lastState.get(row.symbol) || {};
+    let longC = prev.hintCountDateKey === dateKey ? (prev.longHints8am || 0) : 0;
+    let shortC = prev.hintCountDateKey === dateKey ? (prev.shortHints8am || 0) : 0;
+    const side = hintSideFromDelta(row.ratio8amDeltaPct);
+    if (side === 'long') longC += 1;
+    if (side === 'short') shortC += 1;
+    row.hints8amLabel = formatHints8am(longC, shortC);
+    lastState.set(row.symbol, {
+      ...lastState.get(row.symbol),
+      longHints8am: longC,
+      shortHints8am: shortC,
+      hintCountDateKey: dateKey,
+    });
+  }
+  queueSaveState();
+}
+
+/** 每日 08:00 上海：将当前聪明钱比值设为 8 点基准，并重置推荐计数 */
+export async function captureDaily8amRatioBaseline(symbols) {
+  const dateKey = getBaseline8amDateKey();
+  let updated = 0;
+  for (const sym of symbols) {
+    const upper = sym.toUpperCase();
+    try {
+      const row = await scanSymbolForDigest(upper);
+      lastState.set(upper, {
+        ...(lastState.get(upper) || {}),
+        ratio8am: row.ratio,
+        ratio8amDateKey: dateKey,
+        ratio8amSource: '8am',
+        longHints8am: 0,
+        shortHints8am: 0,
+        hintCountDateKey: dateKey,
+      });
+      updated += 1;
+    } catch {}
+  }
+  stateMeta.last8amCaptureDateKey = dateKey;
+  queueSaveState();
+  console.log(`  📸 8点聪明钱基准已更新: ${updated}/${symbols.length} 个 (${dateKey})`);
+}
+
 async function scanSymbolForDigest(symbol) {
   const sym = symbol.toUpperCase();
   registerActiveSymbol(sym);
@@ -225,11 +370,15 @@ function priceChangeLabel(prev, cur) {
   return curStr;
 }
 
-function fundingChangeLabel(prev, cur) {
-  const fmt = (v) => (v * 100).toFixed(2);
+function fundingChangeLabel(prev, cur, deltaPct) {
+  const fmtRate = (v) => `${(v * 100).toFixed(4)}%`;
   if (cur == null || Number.isNaN(cur)) return '-';
-  if (prev != null && !Number.isNaN(prev)) return `${fmt(prev)}→${fmt(cur)}`;
-  return fmt(cur);
+  if (deltaPct != null && !Number.isNaN(deltaPct) && prev != null && !Number.isNaN(prev)) {
+    const sign = deltaPct >= 0 ? '+' : '';
+    return `${fmtRate(prev)}→${fmtRate(cur)} (${sign}${deltaPct.toFixed(1)}%)`;
+  }
+  if (prev != null && !Number.isNaN(prev)) return `${fmtRate(prev)}→${fmtRate(cur)}`;
+  return fmtRate(cur);
 }
 
 function finalizeMarketState(rows) {
@@ -253,27 +402,22 @@ function finalizeMarketState(rows) {
   return rows;
 }
 
-function mergeBoardLists(gainers, losers, pinned, enrichedMap) {
-  const gSet = new Set(gainers.map(g => g.symbol.toUpperCase()));
-  const lSet = new Set(losers.map(l => l.symbol.toUpperCase()));
-  const gOut = [...gainers];
-  const lOut = [...losers];
-  for (const sym of pinned || []) {
-    const upper = sym.toUpperCase();
-    if (gSet.has(upper) || lSet.has(upper)) continue;
-    const row = enrichedMap.get(upper);
-    if (!row) continue;
-    const change = row.change8am ?? 0;
-    const entry = { symbol: upper, change, pinned: true };
-    if (change >= 0) {
-      gOut.push(entry);
-      gSet.add(upper);
-    } else {
-      lOut.push(entry);
-      lSet.add(upper);
-    }
-  }
-  return { gainers: gOut, losers: lOut };
+function buildPinnedBoardRows(pinned, enrichedMap) {
+  return sortByRatioChange(
+    (pinned || [])
+      .map(sym => {
+        const row = enrichedMap.get(sym.toUpperCase());
+        if (!row) return null;
+        return { ...row, change8am: row.change8am ?? 0, change24h: row.change24h ?? 0, pinned: true };
+      })
+      .filter(Boolean),
+    (a, b) => Math.abs(b.ratioDeltaPct ?? 0) - Math.abs(a.ratioDeltaPct ?? 0),
+  );
+}
+
+function fmtPriceChangePct(v) {
+  if (v == null || Number.isNaN(v)) return '-';
+  return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
 }
 
 function buildDigestTableRows(rows, highlightPct) {
@@ -282,60 +426,215 @@ function buildDigestTableRows(rows, highlightPct) {
     const ratioText = r.prevRatio != null
       ? `${r.prevRatio.toFixed(2)}→${r.ratio.toFixed(2)}`
       : r.ratio.toFixed(2);
-    const chg8 = r.change8am != null
-      ? `${r.change8am >= 0 ? '+' : ''}${r.change8am.toFixed(1)}%`
-      : '-';
     return {
       coin: `${r.pinned ? '📌 ' : ''}[${r.badge}] ${r.label}`,
-      chg8am: chg8,
-      chg30m: trend,
+      chg24h: fmtPriceChangePct(r.change24h),
+      chg8am: fmtPriceChangePct(r.change8am),
+      chg1h: trend,
       ratio: ratioText,
       delta: ratioDeltaDisplay(r.ratioDeltaPct, highlightPct),
-      hint: tradeHintLabel(r.ratioDeltaPct, highlightPct),
+      delta8am: ratioDeltaDisplay(r.ratio8amDeltaPct, highlightPct),
+      hints8am: r.hints8amLabel || '-',
+      hint: tradeHintLabel(r.ratio8amDeltaPct, highlightPct),
       price: priceChangeLabel(r.prevPrice, r.price),
       mc: r.marketCapLabel || '-',
-      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate),
+      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
     };
   });
 }
 
 const DIGEST_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
-  { name: 'chg8am', display_name: '8点来', data_type: 'text', width: 'auto' },
-  { name: 'chg30m', display_name: '30min', data_type: 'text', width: 'auto' },
-  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
-  { name: 'delta', display_name: '变化%', data_type: 'text', width: 'auto' },
-  { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
+  { name: 'chg24h', display_name: '24h', data_type: 'text', width: 'auto' },
+  { name: 'chg8am', display_name: '8am', data_type: 'text', width: 'auto' },
   { name: 'price', display_name: '价格Δ', data_type: 'text', width: 'auto' },
+  { name: 'chg1h', display_name: '1h', data_type: 'text', width: 'auto' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
+  { name: 'delta', display_name: '1hΔ', data_type: 'text', width: 'auto' },
+  { name: 'delta8am', display_name: '8amΔ', data_type: 'text', width: 'auto' },
+  { name: 'hints8am', display_name: '8am推', data_type: 'text', width: 'auto' },
+  { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
   { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
-  { name: 'funding', display_name: '费率Δ', data_type: 'text', width: 'auto' },
+  { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
 ];
 
-/** 涨幅榜 / 跌幅榜 单张卡片（表格内置分页） */
-export function buildBoardDigestElements(rows, {
+function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
+  let shiftLong1h = 0;
+  let shiftShort1h = 0;
+  let nLong1h = 0;
+  let nShort1h = 0;
+  let shiftLong8am = 0;
+  let shiftShort8am = 0;
+  let nLong8am = 0;
+  let nShort8am = 0;
+  let curLong = 0;
+  let curShort = 0;
+  let curNeutral = 0;
+
+  for (const r of rows) {
+    if (r.direction === 'long') curLong += 1;
+    else if (r.direction === 'short') curShort += 1;
+    else curNeutral += 1;
+
+    const d1 = r.ratioDeltaPct;
+    if (d1 != null && !Number.isNaN(d1)) {
+      if (d1 >= warnPct) {
+        shiftLong1h += d1;
+        nLong1h += 1;
+      } else if (d1 <= -warnPct) {
+        shiftShort1h += Math.abs(d1);
+        nShort1h += 1;
+      }
+    }
+
+    const d8 = r.ratio8amDeltaPct;
+    if (d8 != null && !Number.isNaN(d8)) {
+      if (d8 >= warnPct) {
+        shiftLong8am += d8;
+        nLong8am += 1;
+      } else if (d8 <= -warnPct) {
+        shiftShort8am += Math.abs(d8);
+        nShort8am += 1;
+      }
+    }
+  }
+
+  let verdict;
+  let advice;
+  let template;
+  if (nLong1h > nShort1h) {
+    verdict = '📈 当前总体偏做多';
+    advice = `1h 内变多 ${nLong1h} 个 > 变少 ${nShort1h} 个，聪明钱整体在向多头转移。`;
+    template = 'green';
+  } else if (nLong1h < nShort1h) {
+    verdict = '📉 当前总体偏做空';
+    advice = `1h 内变少 ${nShort1h} 个 > 变多 ${nLong1h} 个，聪明钱整体在向空头转移。`;
+    template = 'red';
+  } else if (nLong8am > nShort8am) {
+    verdict = '📈 当前总体偏做多';
+    advice = `1h 变多/变少持平；8am 以来变多 ${nLong8am} 个 > 变少 ${nShort8am} 个。`;
+    template = 'green';
+  } else if (nLong8am < nShort8am) {
+    verdict = '📉 当前总体偏做空';
+    advice = `1h 变多/变少持平；8am 以来变少 ${nShort8am} 个 > 变多 ${nLong8am} 个。`;
+    template = 'red';
+  } else {
+    verdict = '⚖️ 多空均衡 · 观望';
+    advice = '变多/变少数量接近，方向尚不明朗。';
+    template = 'blue';
+  }
+
+  const topLong = rows
+    .filter(r => r.ratioDeltaPct != null && r.ratioDeltaPct >= warnPct)
+    .sort((a, b) => b.ratioDeltaPct - a.ratioDeltaPct)
+    .slice(0, 5);
+  const topShort = rows
+    .filter(r => r.ratioDeltaPct != null && r.ratioDeltaPct <= -warnPct)
+    .sort((a, b) => a.ratioDeltaPct - b.ratioDeltaPct)
+    .slice(0, 5);
+
+  return {
+    verdict,
+    advice,
+    template,
+    nLong1h,
+    nShort1h,
+    nLong8am,
+    nShort8am,
+    curLong,
+    curShort,
+    curNeutral,
+    shiftLong1h,
+    shiftShort1h,
+    shiftLong8am,
+    shiftShort8am,
+    topLong,
+    topShort,
+  };
+}
+
+function buildMarketOutlookElements(rows, outlook, { intervalMin = 60, highlightPct = 10, merged = false } = {}) {
+  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  const flat1h = rows.length - outlook.nLong1h - outlook.nShort1h;
+  const flat8am = rows.length - outlook.nLong8am - outlook.nShort8am;
+
+  const lines = merged
+    ? ['**🎯 总体行情研判**']
+    : [`**⏰ ${now}** · 监控池 ${rows.length} 个 · 近 ${intervalMin}min 扫描`];
+  lines.push(
+    '',
+    '_判断标准：比较多空比「变多」与「变少」的币种数量（≥5% 为有效变化）_',
+    '',
+    '**📊 1h 聪明钱变化（相对上次推送）**',
+    `1. 变多 **${outlook.nLong1h}** 个 · 累计 ${ratioDeltaLabel(outlook.shiftLong1h)}`,
+    `2. 变少 **${outlook.nShort1h}** 个 · 累计 ${ratioDeltaLabel(-outlook.shiftShort1h)}`,
+    `3. 持平/微动 **${Math.max(0, flat1h)}** 个`,
+    '',
+    '**📊 8am 以来聪明钱变化**',
+    `1. 变多 **${outlook.nLong8am}** 个 · 累计 ${ratioDeltaLabel(outlook.shiftLong8am)}`,
+    `2. 变少 **${outlook.nShort8am}** 个 · 累计 ${ratioDeltaLabel(-outlook.shiftShort8am)}`,
+    `3. 持平/微动 **${Math.max(0, flat8am)}** 个`,
+    '',
+    '**🧭 当前聪明钱持仓倾向（参考）**',
+    `1. 偏多 **${outlook.curLong}** 个`,
+    `2. 偏空 **${outlook.curShort}** 个`,
+    `3. 中性 **${outlook.curNeutral}** 个`,
+    '',
+    `**🎯 综合判断:** ${outlook.verdict}`,
+    `${outlook.advice}`,
+  );
+
+  if (outlook.topLong.length) {
+    lines.push('', `**⚡ 变多最显著 Top${outlook.topLong.length}:**`);
+    outlook.topLong.forEach((r, i) => {
+      lines.push(`${i + 1}. **${r.label}** ${ratioDeltaDisplay(r.ratioDeltaPct, highlightPct)} ${tradeHintLabel(r.ratioDeltaPct, highlightPct)}`);
+    });
+  }
+  if (outlook.topShort.length) {
+    lines.push('', `**⚡ 变少最显著 Top${outlook.topShort.length}:**`);
+    outlook.topShort.forEach((r, i) => {
+      lines.push(`${i + 1}. **${r.label}** ${ratioDeltaDisplay(r.ratioDeltaPct, highlightPct)} ${tradeHintLabel(r.ratioDeltaPct, highlightPct)}`);
+    });
+  }
+
+  return [{ tag: 'markdown', content: lines.join('\n') }];
+}
+
+/** 单板块元素（表格 + 显著变化列表） */
+function buildBoardSectionElements(rows, {
   boardLabel = '涨幅榜',
-  intervalMin = 30,
   highlightPct = 10,
   pageSize = 10,
-  dateKey = '',
   topN = 30,
+  merged = false,
+  dateKey = '',
 } = {}) {
-  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const bigMoves = rows
-    .filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= RATIO_WARN_PCT)
+    .filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct)
     .sort((a, b) => Math.abs(b.ratioDeltaPct) - Math.abs(a.ratioDeltaPct));
 
-  const elements = [
-    {
-      tag: 'markdown',
-      content: `**⏰ ${now}**\n**${boardLabel}** · Top${topN} · ${rows.length} 个币种${dateKey ? ` · ${dateKey} 8点基准` : ''}\n_按聪明钱变化幅度排序 · 价格/费率显示上次→本次(约${intervalMin}min) · ⚡≥5% · 🔥≥${highlightPct}% · 参考列仅供研判_`,
-    },
-  ];
-
-  if (bigMoves.length > 0) {
+  const elements = [];
+  if (merged) {
+    const bigNote = bigMoves.length ? ` · ${bigMoves.length}个≥${highlightPct}%变化` : '';
     elements.push({
       tag: 'markdown',
-      content: `**⚡ 聪明钱显著变化:** ${bigMoves.map(r => `${r.label} ${ratioDeltaDisplay(r.ratioDeltaPct, highlightPct)} ${tradeHintLabel(r.ratioDeltaPct, highlightPct)}`).join(' · ')}`,
+      content: `**${boardLabel}** · ${rows.length} 个${topN ? `Top${topN}` : ''}${bigNote}`,
+    });
+  } else {
+    const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    elements.push({
+      tag: 'markdown',
+      content: `**⏰ ${now}**\n**${boardLabel}** · ${rows.length} 个${dateKey ? ` · ${dateKey}` : ''}\n_24h/8am=价格涨跌幅 · 1hΔ=相对上次推送聪明钱 · 8amΔ=相对8点聪明钱 · 参考=基于8amΔ_`,
+    });
+  }
+
+  if (bigMoves.length > 0) {
+    const listLines = bigMoves.map((r, i) =>
+      `${i + 1}. **${r.label}** ${ratioDeltaDisplay(r.ratioDeltaPct, highlightPct)} ${tradeHintLabel(r.ratioDeltaPct, highlightPct)}`,
+    ).join('\n');
+    elements.push({
+      tag: 'markdown',
+      content: `**⚡ 聪明钱显著变化:**\n${listLines}`,
     });
   }
 
@@ -351,25 +650,84 @@ export function buildBoardDigestElements(rows, {
   return elements;
 }
 
+function buildMergedSmartTrendElements({ boards, outlook, enriched, intervalMin, highlightPct, pageSize, dateKey, topN }) {
+  const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+  const elements = [{
+    tag: 'markdown',
+    content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min\n_24h/8am=价格涨跌幅 · 1hΔ/8amΔ=聪明钱多空比变化 · 参考=基于8amΔ_`,
+  }];
+
+  for (const board of boards) {
+    if (!board.rows.length) continue;
+    elements.push(...buildBoardSectionElements(board.rows, {
+      boardLabel: board.label,
+      highlightPct,
+      pageSize,
+      topN: board.key === 'gainer' || board.key === 'loser' ? topN : undefined,
+      merged: true,
+      dateKey,
+    }));
+  }
+
+  elements.push(...buildMarketOutlookElements(enriched, outlook, { intervalMin, highlightPct, merged: true }));
+  return elements;
+}
+
+/** 涨幅榜 / 跌幅榜 单张卡片（表格内置分页） */
+export function buildBoardDigestElements(rows, options = {}) {
+  return buildBoardSectionElements(rows, options);
+}
+
+function serializePushRow(r) {
+  return {
+    symbol: r.symbol,
+    label: r.label,
+    badge: r.badge,
+    direction: r.direction,
+    ratio: r.ratio,
+    prevRatio: r.prevRatio ?? null,
+    ratioDeltaPct: r.ratioDeltaPct ?? null,
+    ratio8am: r.ratio8am ?? null,
+    ratio8amDeltaPct: r.ratio8amDeltaPct ?? null,
+    change24h: r.change24h ?? null,
+    change8am: r.change8am ?? null,
+    price: r.price ?? null,
+    prevPrice: r.prevPrice ?? null,
+    fundingRate: r.fundingRate ?? null,
+    prevFundingRate: r.prevFundingRate ?? null,
+    fundingDeltaPct: r.fundingDeltaPct ?? null,
+    hints8amLabel: r.hints8amLabel ?? null,
+    marketCapLabel: r.marketCapLabel ?? null,
+    pinned: r.pinned ?? false,
+    volumeRank: r.volumeRank ?? null,
+  };
+}
+
+async function savePushMock(snapshot) {
+  await mkdir(DATA_DIR, { recursive: true });
+  await writeFile(MOCK_PUSH_FILE, JSON.stringify(snapshot, null, 2), 'utf8');
+}
+
 export async function runSmartTrendPush({ force = false } = {}) {
   if (!deps?.enabled || !deps?.feishuEnabled || running) return;
-  const watchSymbols = resolveWatchSymbols();
-  if (!watchSymbols?.size) return;
 
   running = true;
-  const intervalMin = deps.intervalMin ?? 30;
+  const intervalMin = deps.intervalMin ?? 60;
   const highlightPct = deps.ratioChangePct ?? 10;
   const pageSize = deps.digestPageSize ?? 10;
-  const groups = deps.getWatchlistGroups?.() || { gainers: [], losers: [], dateKey: '', topN: 30 };
-  const gainerMap = new Map((groups.gainers || []).map(g => [g.symbol.toUpperCase(), g.change]));
-  const loserMap = new Map((groups.losers || []).map(l => [l.symbol.toUpperCase(), l.change]));
 
   try {
-    console.log(`\n  📤 聪明钱全池扫描 (${watchSymbols.size} 个)...`);
+    await deps.refreshWatchlist?.();
+    const watchSymbolsAfterRefresh = resolveWatchSymbols();
+    if (!watchSymbolsAfterRefresh?.size) return;
+
+    const groups = deps.getWatchlistGroups?.() || { gainers: [], losers: [], dateKey: '', topN: 30 };
+    console.log(`\n  📤 聪明钱全池扫描 (${watchSymbolsAfterRefresh.size} 个)...`);
+
     const rowMap = new Map();
     let failed = 0;
 
-    for (const sym of watchSymbols) {
+    for (const sym of watchSymbolsAfterRefresh) {
       try {
         const row = await scanSymbolForDigest(sym);
         rowMap.set(sym.toUpperCase(), row);
@@ -385,10 +743,13 @@ export async function runSmartTrendPush({ force = false } = {}) {
     }
 
     const allRows = [...rowMap.values()];
+    await attachRatio8amDeltas(allRows);
+    recordHints8amCounts(allRows);
     const enriched = deps.batchEnrichDigest
       ? await deps.batchEnrichDigest(allRows).catch(() => allRows)
       : allRows;
     finalizeMarketState(enriched);
+
     const enrichedMap = new Map(enriched.map(r => [r.symbol, r]));
 
     const buildBoardRows = (boardList, tieBreakFn) => sortByRatioChange(
@@ -396,57 +757,159 @@ export async function runSmartTrendPush({ force = false } = {}) {
         .map(({ symbol, change, pinned = false }) => {
           const row = enrichedMap.get(symbol.toUpperCase());
           if (!row) return null;
-          return { ...row, change8am: row.change8am ?? change, pinned };
+          return { ...row, change24h: row.change24h ?? change, change8am: row.change8am ?? change, pinned };
         })
         .filter(Boolean),
       tieBreakFn,
     );
 
-    const merged = mergeBoardLists(
-      groups.gainers || [],
-      groups.losers || [],
-      groups.pinned || [],
-      enrichedMap,
-    );
+    const pinnedSet = new Set((groups.pinned || []).map(s => s.toUpperCase()));
+    const excludePinned = (list) => (list || []).filter(item => !pinnedSet.has(item.symbol.toUpperCase()));
 
     const gainerRows = buildBoardRows(
-      merged.gainers,
-      (a, b) => (b.change8am ?? 0) - (a.change8am ?? 0),
+      excludePinned(groups.gainers),
+      (a, b) => (b.change24h ?? b.change8am ?? 0) - (a.change24h ?? a.change8am ?? 0),
     );
     const loserRows = buildBoardRows(
-      merged.losers,
-      (a, b) => (a.change8am ?? 0) - (b.change8am ?? 0),
+      excludePinned(groups.losers),
+      (a, b) => (a.change24h ?? a.change8am ?? 0) - (b.change24h ?? b.change8am ?? 0),
+    );
+    const pinnedRows = buildPinnedBoardRows(groups.pinned, enrichedMap);
+    const pinLabels = (groups.pinned || []).map(s => s.replace(/USDT$/, '')).join(', ');
+
+    const rightSideRows = buildBoardRows(
+      (groups.rightSide || []).map(item => ({ symbol: item.symbol, change: item.change })),
+      (a, b) => (b.change24h ?? b.change8am ?? 0) - (a.change24h ?? a.change8am ?? 0),
+    );
+
+    const volumeTopN = groups.volumeTopN ?? 50;
+    const volumeRows = sortByRatioChange(
+      (groups.volumeTop || [])
+        .map(({ symbol, volume }) => {
+          const row = enrichedMap.get(symbol.toUpperCase());
+          if (!row) return null;
+          return { ...row, volumeRank: volume };
+        })
+        .filter(Boolean),
+      (a, b) => (b.volumeRank ?? 0) - (a.volumeRank ?? 0),
     );
 
     const boards = [
-      { key: 'gainer', label: '📈 8点涨幅榜', rows: gainerRows, template: 'green' },
-      { key: 'loser', label: '📉 8点跌幅榜', rows: loserRows, template: 'red' },
+      { key: 'gainer', label: '📈 24h涨幅榜', rows: gainerRows, template: 'green' },
+      { key: 'loser', label: '📉 24h跌幅榜', rows: loserRows, template: 'red' },
     ];
+    if (pinnedRows.length) {
+      boards.push({
+        key: 'pinned',
+        label: `📌 固定监控${pinLabels ? ` · ${pinLabels}` : ''}`,
+        rows: pinnedRows,
+        template: 'blue',
+      });
+    }
+    if (rightSideRows.length) {
+      boards.push({
+        key: 'rightSide',
+        label: '📐 右侧交易',
+        rows: rightSideRows,
+        template: 'orange',
+      });
+    }
+    if (volumeRows.length) {
+      boards.push({
+        key: 'volumeTop',
+        label: `💰 24h交易额 Top${volumeTopN}`,
+        rows: volumeRows,
+        template: 'purple',
+      });
+    }
 
     let sent = 0;
-    for (const board of boards) {
-      if (!board.rows.length) {
-        console.warn(`  ⚠ ${board.label}: 无可用数据，跳过`);
-        continue;
-      }
-      const bigCount = board.rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
-      const elements = buildBoardDigestElements(board.rows, {
-        boardLabel: board.label,
+    const mergeCards = deps.mergeCards !== false;
+    const outlook = computeMarketOutlook(enriched);
+
+    const totalCoins = gainerRows.length + loserRows.length + pinnedRows.length + rightSideRows.length + volumeRows.length;
+    const totalBig = [...gainerRows, ...loserRows, ...pinnedRows, ...rightSideRows, ...volumeRows]
+      .filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+
+    await savePushMock({
+      capturedAt: Date.now(),
+      dateKey: groups.dateKey,
+      mergeCards,
+      highlightPct,
+      intervalMin,
+      watchlist: {
+        gainers: groups.gainers,
+        losers: groups.losers,
+        pinned: groups.pinned,
+        rightSide: groups.rightSide,
+        volumeTop: groups.volumeTop,
+        volumeTopN: groups.volumeTopN,
+        topN: groups.topN,
+      },
+      boards: boards.map(b => ({
+        key: b.key,
+        label: b.label,
+        template: b.template,
+        rowCount: b.rows.length,
+        rows: b.rows.map(serializePushRow),
+      })),
+      outlook,
+      stats: {
+        totalCoins,
+        totalBig,
+        failed,
+        symbolCount: watchSymbolsAfterRefresh.size,
+      },
+    });
+
+    if (mergeCards) {
+      const mergedElements = buildMergedSmartTrendElements({
+        boards: boards.filter(b => b.rows.length),
+        outlook,
+        enriched,
         intervalMin,
         highlightPct,
         pageSize,
         dateKey: groups.dateKey,
         topN: groups.topN ?? 30,
       });
-      const title = bigCount > 0
-        ? `${board.label} · Top${groups.topN ?? 30} · ${bigCount}个聪明钱显著变化`
-        : `${board.label} · Top${groups.topN ?? 30}`;
-      await deps.sendFeishuCard(title, elements, board.template);
+      const verdictShort = outlook.verdict.replace(/^[^\s]+\s/, '');
+      await deps.sendFeishuCard(`📊 聪明钱监控全览 · ${verdictShort}`, mergedElements, outlook.template);
+      sent = 1;
+    } else {
+      for (const board of boards) {
+        if (!board.rows.length) {
+          console.warn(`  ⚠ ${board.label}: 无可用数据，跳过`);
+          continue;
+        }
+        const bigCount = board.rows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+        const elements = buildBoardDigestElements(board.rows, {
+          boardLabel: board.label,
+          highlightPct,
+          pageSize,
+          dateKey: groups.dateKey,
+          topN: groups.topN ?? 30,
+        });
+        const title = (board.key === 'pinned' || board.key === 'rightSide' || board.key === 'volumeTop')
+          ? (bigCount > 0 ? `${board.label} · ${bigCount}个聪明钱显著变化` : board.label)
+          : (bigCount > 0
+            ? `${board.label} · Top${groups.topN ?? 30} · ${bigCount}个聪明钱显著变化`
+            : `${board.label} · Top${groups.topN ?? 30}`);
+        await deps.sendFeishuCard(title, elements, board.template);
+        sent += 1;
+        await new Promise(r => setTimeout(r, 2500));
+      }
+      const outlookElements = buildMarketOutlookElements(enriched, outlook, { intervalMin, highlightPct });
+      await deps.sendFeishuCard(`🎯 总体行情研判 · ${outlook.verdict.replace(/^[^\s]+\s/, '')}`, outlookElements, outlook.template);
       sent += 1;
     }
 
-    const totalBig = [...gainerRows, ...loserRows].filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
-    console.log(`  ✓ 聪明钱榜单推送: 涨幅 ${gainerRows.length} + 跌幅 ${loserRows.length} · ${sent} 张卡片 · ${totalBig} 个≥${highlightPct}%变化${failed ? ` · ${failed} 扫描失败` : ''}`);
+    const pinPart = pinnedRows.length ? ` + 固定 ${pinnedRows.length}` : '';
+    const rightSidePart = rightSideRows.length ? ` + 右侧 ${rightSideRows.length}` : '';
+    const volumePart = volumeRows.length ? ` + 交易额 ${volumeRows.length}` : '';
+    const boardPart = `涨幅 ${gainerRows.length} + 跌幅 ${loserRows.length}${pinPart}${rightSidePart}${volumePart}`;
+    const cardPart = mergeCards ? '1 张合并卡片' : `${sent} 张卡片(含研判)`;
+    console.log(`  ✓ 聪明钱榜单推送: ${boardPart} · ${cardPart} · 共 ${totalCoins} 个 · ${totalBig} 个≥${highlightPct}%显著变化${failed ? ` · ${failed} 扫描失败` : ''} · ${outlook.verdict}`);
   } catch (e) {
     console.warn(`  ⚠ 聪明钱全池推送失败: ${e.message}`);
   } finally {
@@ -458,16 +921,17 @@ export function startSmartTrendScheduler() {
   if (!deps?.enabled) return;
   if (digestTimer) clearTimeout(digestTimer);
 
-  const intervalMin = deps.intervalMin ?? 30;
+  const intervalMin = deps.intervalMin ?? 60;
+  const highlightPct = deps.ratioChangePct ?? 10;
   const syms = [...(resolveWatchSymbols() || [])];
   const watchLabel = syms.length > 10
     ? `${syms.slice(0, 10).map(s => s.replace(/USDT$/, '')).join(', ')} 等 ${syms.length} 个`
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
-  console.log(`  📊 聪明钱榜单推送: 上海时间每整点/半点 · 涨幅榜+跌幅榜各1张卡片(表格分页) · 监控 ${watchLabel || '（池为空）'}`);
+  console.log(`  📊 聪明钱榜单推送: 上海时间每整点 · ${deps.mergeCards !== false ? '单卡合并推送' : '分卡推送'} · 24h涨跌幅榜+交易额Top+固定+右侧+总体研判 · 监控 ${watchLabel || '（池为空）'}`);
 
   const scheduleNext = () => {
-    const next = getNextHalfHourShanghai();
+    const next = getNextHourShanghai();
     const delay = Math.max(0, next.getTime() - Date.now());
     const label = next.toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     console.log(`  ⏭ 聪明钱下次推送: ${label}（${Math.round(delay / 60000)} 分钟后）`);

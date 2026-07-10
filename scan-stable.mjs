@@ -1,14 +1,9 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+import { isTradFiSymbol, loadTradFiExclusions } from './tradfi-symbol-filter.mjs';
 
 setupProxyFromEnv();
 
 const FAPI_BASE = 'https://fapi.binance.com';
-
-const STOCK_COINS = new Set([
-  'COINUSDT',
-  'MSTRUSDT',
-  'HOODUSDT',
-]);
 
 function calcMA(closes, period) {
   const r = [];
@@ -210,7 +205,46 @@ async function pmap(items, fn, concurrency = 3) {
   return results;
 }
 
-export { checkCoinRightStable };
+export { checkCoinRightStable, checkRightSideFromKlines };
+
+export async function scanRightSide({
+  limit = 200,
+  filterTF = '1h',
+  concurrency = 3,
+} = {}) {
+  await loadTradFiExclusions();
+  const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
+  const symbols = tickers
+    .filter(t => t.symbol.endsWith('USDT') && !isTradFiSymbol(t.symbol))
+    .map(t => ({
+      symbol: t.symbol,
+      volume: parseFloat(t.quoteVolume),
+      change: parseFloat(t.priceChangePercent),
+      price: parseFloat(t.lastPrice),
+    }))
+    .sort((a, b) => b.volume - a.volume)
+    .slice(0, limit);
+
+  const results = [];
+  await pmap(symbols, async (item) => {
+    const raw = await fetchJSON(`${FAPI_BASE}/fapi/v1/klines?symbol=${item.symbol}&interval=${filterTF}&limit=100`);
+    const r = checkRightSideFromKlines(raw, filterTF);
+    if (r?.isRightSide) {
+      results.push({
+        symbol: item.symbol,
+        label: item.symbol.replace('USDT', ''),
+        score: r.score,
+        detail: r.detail,
+        volume: item.volume,
+        change: item.change,
+        price: item.price,
+      });
+    }
+  }, concurrency);
+
+  results.sort((a, b) => b.score - a.score || b.change - a.change);
+  return results;
+}
 
 export async function scanRightStable({
   limit = 200,
@@ -220,9 +254,10 @@ export async function scanRightStable({
   concurrency = 3,
   strictTrend = false,
 } = {}) {
+  await loadTradFiExclusions();
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
   const symbols = tickers
-    .filter(t => t.symbol.endsWith('USDT') && !STOCK_COINS.has(t.symbol))
+    .filter(t => t.symbol.endsWith('USDT') && !isTradFiSymbol(t.symbol))
     .map(t => ({
       symbol: t.symbol,
       volume: parseFloat(t.quoteVolume),

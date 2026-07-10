@@ -3,14 +3,15 @@ import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { scanRightStable } from './scan-stable.mjs';
+import { scanRightStable, scanRightSide } from './scan-stable.mjs';
 import { fetchSmartSignal, analyzeSmartSignal, scanSmartSignal } from './scan-smart-signal.mjs';
 import { setupProxyFromEnv, fetchJson } from './proxy-setup.mjs';
 import { checkDumpRisk, scanDumpCoins, formatDumpPushContent } from './scan-dump-risk.mjs';
 import { scanShortSignals } from './scan-short-signal.mjs';
 import { scanMomentumLong } from './scan-momentum.mjs';
-import { recordWhaleSnapshot, getWhaleHistory, registerActiveSymbol, startWhaleCollector } from './whale-history.mjs';
+import { recordWhaleSnapshot, getWhaleHistory, getWhaleHistoryBulk, registerActiveSymbol, startWhaleCollector } from './whale-history.mjs';
 import { MAX_MARKET_CAP_USD, isEligibleMarketCap, formatMaxMarketCapLabel } from './market-cap-filter.mjs';
+import { filterTradFiItems, loadTradFiExclusions, warmupTradFiExclusions, isTradFiSymbol, EXCLUDE_TRADFI_SYMBOLS } from './tradfi-symbol-filter.mjs';
 import {
   initStrategyReview, savePredictionSnapshot, runStrategyReview,
   getStrategyReviews, getLatestPredictions, startStrategyReviewScheduler,
@@ -22,7 +23,7 @@ import {
 import { evaluatePositionHealth, evaluatePositionsBatch } from './position-health.mjs';
 import { getUserPositions, addUserPosition, deleteUserPosition } from './user-positions.mjs';
 import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
-import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated } from './smart-trend-monitor.mjs';
+import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 
 const FETCH_TIMEOUT_MS = 15000;
@@ -78,6 +79,29 @@ function assertTickerArray(tickers, label = 'ticker/24hr') {
   if (Array.isArray(tickers)) return tickers;
   const msg = tickers?.msg || tickers?.message || JSON.stringify(tickers).slice(0, 120);
   throw new Error(`币安 ${label} 数据异常: ${msg}（请检查代理节点）`);
+}
+
+const TICKER_24HR_CACHE_TTL_MS = parseInt(process.env.BINANCE_TICKER_CACHE_TTL_SEC || '60', 10) * 1000;
+const ticker24hrCache = { data: null, ts: 0, inflight: null };
+
+/** 全量 ticker/24hr 短 TTL 缓存 + 并发去重，避免同一轮推送重复请求 */
+async function fetchTicker24hr() {
+  if (ticker24hrCache.data && Date.now() - ticker24hrCache.ts < TICKER_24HR_CACHE_TTL_MS) {
+    return ticker24hrCache.data;
+  }
+  if (ticker24hrCache.inflight) return ticker24hrCache.inflight;
+
+  ticker24hrCache.inflight = (async () => {
+    try {
+      const data = assertTickerArray(await proxyBinance('/fapi/v1/ticker/24hr'));
+      ticker24hrCache.data = data;
+      ticker24hrCache.ts = Date.now();
+      return data;
+    } finally {
+      ticker24hrCache.inflight = null;
+    }
+  })();
+  return ticker24hrCache.inflight;
 }
 
 async function waitForNetworkReady(label = '币安 API', {
@@ -160,7 +184,7 @@ async function load8amBaselinePrices(symbols) {
 }
 
 async function handleGainersSince8am(limit) {
-  const tickers = assertTickerArray(await proxyBinance('/fapi/v1/ticker/24hr'));
+  const tickers = await fetchTicker24hr();
   const usdt = tickers.filter(t => t.symbol.endsWith('USDT'));
   const symbols = usdt.map(t => t.symbol);
   const { dateKey, openTime, prices: baselines } = await load8amBaselinePrices(symbols);
@@ -182,7 +206,7 @@ async function handleGainersSince8am(limit) {
     })
     .sort((a, b) => b.change - a.change)
     .slice(0, limit);
-  const filteredItems = await filterItemsByMarketCap(items, 'symbol');
+  const filteredItems = await filterEligibleSymbols(items, 'symbol');
   const { label } = getBaseline8amInfo();
   return {
     meta: { baselineDate: dateKey, baselineTime: '08:00', timezone: 'Asia/Shanghai', baselineLabel: label, openTime },
@@ -191,7 +215,7 @@ async function handleGainersSince8am(limit) {
 }
 
 async function handleLosersSince8am(limit) {
-  const tickers = assertTickerArray(await proxyBinance('/fapi/v1/ticker/24hr'));
+  const tickers = await fetchTicker24hr();
   const usdt = tickers.filter(t => t.symbol.endsWith('USDT'));
   const symbols = usdt.map(t => t.symbol);
   const { dateKey, openTime, prices: baselines } = await load8amBaselinePrices(symbols);
@@ -213,7 +237,7 @@ async function handleLosersSince8am(limit) {
     })
     .sort((a, b) => a.change - b.change)
     .slice(0, limit);
-  const filteredItems = await filterItemsByMarketCap(items, 'symbol');
+  const filteredItems = await filterEligibleSymbols(items, 'symbol');
   const { label } = getBaseline8amInfo();
   return {
     meta: { baselineDate: dateKey, baselineTime: '08:00', timezone: 'Asia/Shanghai', baselineLabel: label, openTime },
@@ -221,14 +245,80 @@ async function handleLosersSince8am(limit) {
   };
 }
 
+async function handleGainers24h(limit) {
+  const tickers = await fetchTicker24hr();
+  const items = tickers
+    .filter(t => t.symbol.endsWith('USDT'))
+    .map(t => ({
+      symbol: t.symbol,
+      label: t.symbol.replace(/USDT$/, ''),
+      price: parseFloat(t.lastPrice),
+      volume: parseFloat(t.quoteVolume),
+      change: parseFloat(t.priceChangePercent),
+      change24h: parseFloat(t.priceChangePercent),
+    }))
+    .sort((a, b) => b.change - a.change)
+    .slice(0, limit);
+  const filteredItems = await filterEligibleSymbols(items, 'symbol');
+  return {
+    meta: { period: '24h', timezone: 'Asia/Shanghai' },
+    items: filteredItems,
+  };
+}
+
+async function handleLosers24h(limit) {
+  const tickers = await fetchTicker24hr();
+  const items = tickers
+    .filter(t => t.symbol.endsWith('USDT'))
+    .map(t => ({
+      symbol: t.symbol,
+      label: t.symbol.replace(/USDT$/, ''),
+      price: parseFloat(t.lastPrice),
+      volume: parseFloat(t.quoteVolume),
+      change: parseFloat(t.priceChangePercent),
+      change24h: parseFloat(t.priceChangePercent),
+    }))
+    .sort((a, b) => a.change - b.change)
+    .slice(0, limit);
+  const filteredItems = await filterEligibleSymbols(items, 'symbol');
+  return {
+    meta: { period: '24h', timezone: 'Asia/Shanghai' },
+    items: filteredItems,
+  };
+}
+
+async function handleTopByVolume(limit) {
+  const tickers = await fetchTicker24hr();
+  const sorted = tickers
+    .filter(t => t.symbol.endsWith('USDT'))
+    .map(t => ({
+      symbol: t.symbol,
+      label: t.symbol.replace(/USDT$/, ''),
+      price: parseFloat(t.lastPrice),
+      volume: parseFloat(t.quoteVolume),
+      change24h: parseFloat(t.priceChangePercent),
+    }))
+    .sort((a, b) => b.volume - a.volume);
+  const filteredItems = (await filterEligibleSymbols(sorted, 'symbol')).slice(0, limit);
+  return { items: filteredItems };
+}
+
 async function batchEnrichSmartTrendDigest(rows) {
   if (!rows.length) return rows;
   const symbols = rows.map(r => r.symbol);
-  const [mcMap, priceMap, { prices: baselines }] = await Promise.all([
+  const symbolSet = new Set(symbols);
+  const [mcMap, { prices: baselines }, tickers] = await Promise.all([
     batchFetchMarketCaps(symbols),
-    fetchCurrentPrices(symbols),
     load8amBaselinePrices(symbols),
+    fetchTicker24hr().catch(() => []),
   ]);
+  const change24hMap = {};
+  const priceMap = {};
+  for (const t of (Array.isArray(tickers) ? tickers : [])) {
+    if (!t?.symbol || !symbolSet.has(t.symbol)) continue;
+    priceMap[t.symbol] = parseFloat(t.lastPrice);
+    change24hMap[t.symbol] = parseFloat(t.priceChangePercent);
+  }
 
   const fundingMap = {};
   await pmap(symbols, async (sym) => {
@@ -238,7 +328,7 @@ async function batchEnrichSmartTrendDigest(rows) {
     } catch {
       fundingMap[sym] = 0;
     }
-  }, 8);
+  }, 5);
 
   return rows.map(r => {
     const fr = fundingMap[r.symbol] ?? 0;
@@ -249,6 +339,7 @@ async function batchEnrichSmartTrendDigest(rows) {
       ...r,
       price,
       change8am,
+      change24h: change24hMap[r.symbol] ?? r.change24h ?? null,
       fundingRate: fr,
       priceLabel: fmtPrice(price),
       marketCapLabel: fmtMarketCap(mcMap[r.symbol]),
@@ -321,7 +412,7 @@ async function fetchSmartTrendContext(symbol, priceHint = null) {
 
 async function fetchCurrentPrices(symbols) {
   if (!symbols.length) return {};
-  const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
+  const tickers = await fetchTicker24hr();
   const map = {};
   for (const t of tickers) {
     if (symbols.includes(t.symbol)) map[t.symbol] = parseFloat(t.lastPrice);
@@ -378,6 +469,24 @@ async function filterItemsByMarketCap(items, symbolKey = 'symbol') {
     console.log(`  [市值过滤] 排除 ${removed} 个大市值币种 (>${formatMaxMarketCapLabel()})`);
   }
   return filtered;
+}
+
+async function filterEligibleSymbols(items, symbolKey = 'symbol') {
+  let result = await filterTradFiItems(items, symbolKey);
+  result = await filterItemsByMarketCap(result, symbolKey);
+  return result;
+}
+
+async function rejectIfTradFiSymbol(symbol, res) {
+  if (!EXCLUDE_TRADFI_SYMBOLS) return false;
+  await loadTradFiExclusions();
+  if (isTradFiSymbol(symbol)) {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    res.writeHead(403, headers);
+    res.end(JSON.stringify({ error: '该币种为股票/TradFi 合约，不在监控范围', symbol }));
+    return true;
+  }
+  return false;
 }
 
 async function rejectIfMarketCapTooLarge(symbol, res) {
@@ -455,12 +564,15 @@ const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
 );
 
 const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
-const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '30', 10);
-const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '30', 10);
+const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '60', 10);
+const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
 const SMART_TREND_RATIO_CHANGE_PCT = parseFloat(process.env.SMART_TREND_RATIO_CHANGE_PCT || '10', 10);
 const SMART_TREND_DIGEST_PAGE_SIZE = parseInt(process.env.SMART_TREND_DIGEST_PAGE_SIZE || '10', 10);
 const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'false';
 const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
+const SMART_TREND_VOLUME_TOP_N = parseInt(process.env.SMART_TREND_VOLUME_TOP_N || '50', 10);
+const SMART_TREND_MERGE_CARDS = process.env.SMART_TREND_MERGE_CARDS !== 'false';
+const SMART_TREND_WATCHLIST_REFRESH_MIN = parseInt(process.env.SMART_TREND_WATCHLIST_REFRESH_MIN || '60', 10);
 const SMART_TREND_WATCH_SYMBOLS = new Set(
   (process.env.SMART_TREND_WATCH_SYMBOLS || process.env.POSITION_HEALTH_WATCH_SYMBOLS || '')
     .split(/[,，\s]+/)
@@ -494,6 +606,8 @@ async function sendFeishu(title, content) {
   return res.json();
 }
 
+const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
 async function sendFeishuCardV2(title, elements, template = 'blue') {
   if (!FEISHU_WEBHOOK) throw new Error('FEISHU_WEBHOOK 未配置');
   const body = {
@@ -504,16 +618,22 @@ async function sendFeishuCardV2(title, elements, template = 'blue') {
       body: { elements },
     },
   };
-  const res = await fetch(FEISHU_WEBHOOK, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  });
-  const data = await res.json();
-  if (data.code !== 0) {
-    throw new Error(`飞书卡片发送失败: ${data.msg || JSON.stringify(data)}`);
+  const payload = JSON.stringify(body);
+  let lastErr = null;
+  for (let attempt = 0; attempt < 4; attempt++) {
+    if (attempt > 0) await sleep(3000 * attempt);
+    const res = await fetch(FEISHU_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payload,
+    });
+    const data = await res.json();
+    if (data.code === 0) return data;
+    lastErr = new Error(`飞书卡片发送失败: ${data.msg || JSON.stringify(data)}`);
+    const msg = String(data.msg || '');
+    if (!/frequency|rate|limit|频控|限流/i.test(msg)) throw lastErr;
   }
-  return data;
+  throw lastErr;
 }
 
 function formatStablePushContent(results) {
@@ -1415,7 +1535,7 @@ const server = createServer(async (req, res) => {
     const sort = url.searchParams.get('sort') === 'change' ? 'change' : 'volume';
     const minChange = parseFloat(url.searchParams.get('minChange') || '0');
     try {
-      const tickers = await proxyBinance('/fapi/v1/ticker/24hr');
+      const tickers = await fetchTicker24hr();
       let usdt = tickers
         .filter(t => t.symbol.endsWith('USDT'))
         .map(t => ({ symbol: t.symbol, volume: parseFloat(t.quoteVolume), price: parseFloat(t.lastPrice), change: parseFloat(t.priceChangePercent) }));
@@ -1423,7 +1543,7 @@ const server = createServer(async (req, res) => {
       usdt = usdt
         .sort((a, b) => sort === 'change' ? b.change - a.change : b.volume - a.volume)
         .slice(0, limit);
-      usdt = await filterItemsByMarketCap(usdt, 'symbol');
+      usdt = await filterEligibleSymbols(usdt, 'symbol');
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify(usdt));
     } catch (e) {
@@ -1637,6 +1757,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/data') {
     const symbol = url.searchParams.get('symbol') || 'SLXUSDT';
+    if (await rejectIfTradFiSymbol(symbol, res)) return;
     if (await rejectIfMarketCapTooLarge(symbol, res)) return;
     registerActiveSymbol(symbol);
     const ratioLimit = url.searchParams.get('ratioLimit') || 72;
@@ -1655,6 +1776,7 @@ const server = createServer(async (req, res) => {
 
   if (url.pathname === '/api/smart-signal') {
     const symbol = (url.searchParams.get('symbol') || 'BTCUSDT').toUpperCase();
+    if (await rejectIfTradFiSymbol(symbol, res)) return;
     if (await rejectIfMarketCapTooLarge(symbol, res)) return;
     const priceParam = parseFloat(url.searchParams.get('price') || '0');
     const price = priceParam > 0 ? priceParam : null;
@@ -1894,6 +2016,11 @@ server.listen(PORT, () => {
   if (MAX_MARKET_CAP_USD > 0) {
     console.log(`  💰 市值过滤: 仅监控 ≤ ${formatMaxMarketCapLabel()}`);
   }
+  if (EXCLUDE_TRADFI_SYMBOLS) {
+    warmupTradFiExclusions()
+      .then((n) => console.log(`  🏦 TradFi 过滤: 排除股票/TradFi/商品合约 (${n} 个)`))
+      .catch((e) => console.warn(`  ⚠ TradFi 过滤加载失败: ${e.message}`));
+  }
   console.log(`  ⏹  Ctrl+C 退出\n`);
   // 预热8点基准价缓存，避免首次打开涨幅榜等待过久（开机时等待网络就绪）
   waitForNetworkReady('币安 API')
@@ -1938,12 +2065,19 @@ server.listen(PORT, () => {
   initSmartTrendWatchlist({
     enabled: SMART_TREND_ENABLED && SMART_TREND_DYNAMIC_WATCH,
     topN: SMART_TREND_BOARD_TOP_N,
-    getGainersSince8am: handleGainersSince8am,
-    getLosersSince8am: handleLosersSince8am,
+    volumeTopN: SMART_TREND_VOLUME_TOP_N,
+    refreshTtlMs: SMART_TREND_WATCHLIST_REFRESH_MIN * 60 * 1000,
+    boardPeriod: '24h',
+    getGainers24h: handleGainers24h,
+    getLosers24h: handleLosers24h,
+    getTopByVolume: handleTopByVolume,
     registerActiveSymbol,
     onWatchlistUpdated,
+    onDaily8am: (symbols) => captureDaily8amRatioBaseline(symbols),
     extraSymbols: SMART_TREND_WATCH_SYMBOLS,
     fallbackSymbols: SMART_TREND_WATCH_SYMBOLS,
+    scanRightSide,
+    rightSideScanLimit: STABLE_SCAN_LIMIT,
   });
   startSmartTrendWatchlistScheduler().then(() => initSmartTrendMonitor({
     enabled: SMART_TREND_ENABLED,
@@ -1952,11 +2086,16 @@ server.listen(PORT, () => {
     cooldownMin: SMART_TREND_COOLDOWN_MIN,
     ratioChangePct: SMART_TREND_RATIO_CHANGE_PCT,
     digestPageSize: SMART_TREND_DIGEST_PAGE_SIZE,
+    mergeCards: SMART_TREND_MERGE_CARDS,
     watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     getWatchlistGroups: SMART_TREND_DYNAMIC_WATCH ? getWatchlistGroups : undefined,
+    refreshWatchlist: SMART_TREND_DYNAMIC_WATCH
+      ? () => refreshSmartTrendWatchlist({ force: false })
+      : undefined,
     sendFeishuCard: sendFeishuCardV2,
     getWhaleHistory,
+    getWhaleHistoryBulk,
     batchEnrichDigest: batchEnrichSmartTrendDigest,
   })).then(() => startSmartTrendScheduler()).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);

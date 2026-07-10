@@ -11,6 +11,14 @@ export function initPositionHealthMonitor(dependencies) {
   deps = dependencies;
 }
 
+function isUrgent(health, action) {
+  return health === 'critical' || action === 'stop_loss';
+}
+
+function urgentCooldownMs() {
+  return (deps?.urgentCooldownMin ?? 60) * 60 * 1000;
+}
+
 function updateState(id, health, action) {
   const prev = lastState.get(id);
   lastState.set(id, {
@@ -18,26 +26,43 @@ function updateState(id, health, action) {
     action,
     at: Date.now(),
     lastUrgentAt: prev?.lastUrgentAt ?? 0,
+    wasUrgent: isUrgent(health, action),
   });
 }
 
 function isUrgentAlert(id, health, action) {
   const prev = lastState.get(id);
-  if (health === 'critical' || action === 'stop_loss') {
-    if (prev?.lastUrgentAt && Date.now() - prev.lastUrgentAt < 30 * 60 * 1000) {
-      const worse = HEALTH_RANK[health] > HEALTH_RANK[prev.health]
-        || (action === 'stop_loss' && prev.action !== 'stop_loss');
-      if (!worse) return false;
-    }
-    lastState.set(id, { health, action, at: Date.now(), lastUrgentAt: Date.now() });
+  const nowUrgent = isUrgent(health, action);
+
+  if (!nowUrgent) {
+    updateState(id, health, action);
+    return false;
+  }
+
+  const prevWasUrgent = prev?.wasUrgent ?? isUrgent(prev?.health, prev?.action);
+
+  // 首次进入危险/止损：立即推送
+  if (!prevWasUrgent) {
+    lastState.set(id, { health, action, at: Date.now(), lastUrgentAt: Date.now(), wasUrgent: true });
     return true;
   }
-  if (prev && HEALTH_RANK[health] > HEALTH_RANK[prev.health] && health === 'critical') {
-    lastState.set(id, { health, action, at: Date.now(), lastUrgentAt: Date.now() });
-    return true;
+
+  // 已在紧急状态：仅当明显恶化且过了冷却期才再推（避免每 30 分钟重复轰炸）
+  const worse = HEALTH_RANK[health] > HEALTH_RANK[prev.health]
+    || (action === 'stop_loss' && prev.action !== 'stop_loss');
+  if (!worse) {
+    updateState(id, health, action);
+    return false;
   }
-  updateState(id, health, action);
-  return false;
+
+  const cooldown = urgentCooldownMs();
+  if (prev.lastUrgentAt && Date.now() - prev.lastUrgentAt < cooldown) {
+    updateState(id, health, action);
+    return false;
+  }
+
+  lastState.set(id, { health, action, at: Date.now(), lastUrgentAt: Date.now(), wasUrgent: true });
+  return true;
 }
 
 export function resetPositionHealthState() {
@@ -131,14 +156,15 @@ export async function runPositionHealthPush(options = {}) {
 export function startPositionHealthScheduler() {
   if (!deps?.enabled) return;
   const pushHours = deps.pushHours ?? 2;
-  const urgentMin = deps.urgentCheckMin ?? 15;
+  const urgentMin = deps.urgentCheckMin ?? 30;
+  const urgentCooldown = deps.urgentCooldownMin ?? 60;
   const watchLabel = deps.watchSymbols.size
     ? [...deps.watchSymbols].map(s => s.replace('USDT', '')).join(', ')
     : '全部手动持仓';
 
   const slots = [];
   for (let h = 0; h < 24; h += pushHours) slots.push(`${String(h).padStart(2, '0')}:00`);
-  console.log(`  💊 持仓健康监控: 上海时间 ${slots.join(' / ')}（每 ${pushHours}h）→ 飞书 · 危险/止损即时推送 · 监控 ${watchLabel}`);
+  console.log(`  💊 持仓健康监控: 上海时间 ${slots.join(' / ')}（每 ${pushHours}h）→ 飞书 · 危险/止损即时推送（${urgentMin}min 扫描，同仓 ${urgentCooldown}min 去重）· 监控 ${watchLabel}`);
 
   const scheduleNext = () => {
     const getNext = deps.getNextPushTime;

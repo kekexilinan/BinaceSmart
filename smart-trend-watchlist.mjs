@@ -1,5 +1,5 @@
 /**
- * 聪明钱监控币种池：8点基准涨幅榜 TopN + 跌幅榜 TopN，每日 08:00 上海时间刷新
+ * 聪明钱监控币种池：24h 涨幅榜 TopN + 24h 跌幅榜 TopN + 24h 交易额 TopN（排除超市值上限），每日 08:00 上海时间刷新
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -16,7 +16,12 @@ let watchSymbols = new Set();
 let gainerList = [];
 /** @type {{ symbol: string, change: number }[]} */
 let loserList = [];
+/** @type {{ symbol: string, change: number }[]} */
+let rightSideList = [];
+/** @type {{ symbol: string, volume: number }[]} */
+let volumeTopList = [];
 let lastRefreshDateKey = null;
+let lastRefreshAt = 0;
 let refreshTimer = null;
 /** @type {Set<string>} */
 let pinnedSymbols = new Set();
@@ -76,10 +81,13 @@ export function getWatchlistInfo() {
     symbols: [...watchSymbols],
     count: watchSymbols.size,
     dateKey: lastRefreshDateKey,
-    source: '8am_gainer_loser_board',
+    source: deps?.boardPeriod === '24h' ? '24h_gainer_loser_board' : '8am_gainer_loser_board',
     topN: deps?.topN ?? 20,
     gainers: gainerList,
     losers: loserList,
+    rightSide: rightSideList,
+    volumeTop: volumeTopList,
+    volumeTopN: deps?.volumeTopN ?? 50,
   };
 }
 
@@ -88,9 +96,12 @@ export function getWatchlistGroups() {
   return {
     dateKey: lastRefreshDateKey,
     topN: deps?.topN ?? 20,
+    volumeTopN: deps?.volumeTopN ?? 50,
     gainers: gainerList,
     losers: loserList,
     pinned: [...pinnedSymbols],
+    rightSide: rightSideList,
+    volumeTop: volumeTopList,
   };
 }
 
@@ -103,6 +114,9 @@ async function persistWatchlist(meta = {}) {
     updatedAt: Date.now(),
     gainers: meta.gainers || [],
     losers: meta.losers || [],
+    rightSide: meta.rightSide || [],
+    volumeTop: meta.volumeTop || [],
+    volumeTopN: deps?.volumeTopN ?? 50,
   }), 'utf8');
 }
 
@@ -121,10 +135,23 @@ async function loadPersistedWatchlist() {
         symbol: l.symbol.toUpperCase(),
         change: l.change,
       }));
+      rightSideList = (data.rightSide || []).map(r => ({
+        symbol: r.symbol.toUpperCase(),
+        change: r.change,
+      }));
+      volumeTopList = (data.volumeTop || []).map(v => ({
+        symbol: v.symbol.toUpperCase(),
+        volume: v.volume,
+      }));
       for (const sym of watchSymbols) {
         deps?.registerActiveSymbol?.(sym);
       }
-      if (data.topN == null || data.topN !== (deps?.topN ?? 20)) {
+      if (data.updatedAt) lastRefreshAt = data.updatedAt;
+      const expectedVolumeTopN = deps?.volumeTopN ?? 50;
+      if (
+        data.topN == null || data.topN !== (deps?.topN ?? 20)
+        || data.volumeTopN == null || data.volumeTopN !== expectedVolumeTopN
+      ) {
         lastRefreshDateKey = null;
       }
     }
@@ -134,46 +161,95 @@ async function loadPersistedWatchlist() {
 }
 
 export async function refreshSmartTrendWatchlist({ force = false } = {}) {
-  if (!deps?.getGainersSince8am || !deps?.getLosersSince8am) {
-    throw new Error('refreshSmartTrendWatchlist: 缺少 getGainersSince8am / getLosersSince8am');
+  const getGainers = deps?.getGainers24h || deps?.getGainersSince8am;
+  const getLosers = deps?.getLosers24h || deps?.getLosersSince8am;
+  if (!getGainers || !getLosers) {
+    throw new Error('refreshSmartTrendWatchlist: 缺少 getGainers24h / getLosers24h');
   }
 
   const dateKey = getBaseline8amDateKey();
-  if (!force && lastRefreshDateKey === dateKey && watchSymbols.size > 0) {
-    applyPinnedToWatch();
-    return { symbols: [...watchSymbols], skipped: true, dateKey };
+  const use24hBoard = deps?.boardPeriod === '24h';
+  const refreshTtlMs = deps?.refreshTtlMs ?? 60 * 60 * 1000;
+
+  if (!force && watchSymbols.size > 0) {
+    if (!use24hBoard && lastRefreshDateKey === dateKey) {
+      applyPinnedToWatch();
+      return { symbols: [...watchSymbols], skipped: true, dateKey };
+    }
+    if (use24hBoard && lastRefreshAt && Date.now() - lastRefreshAt < refreshTtlMs) {
+      applyPinnedToWatch();
+      return { symbols: [...watchSymbols], skipped: true, dateKey: lastRefreshDateKey };
+    }
   }
 
   const topN = deps.topN ?? 20;
   const prevSymbols = [...watchSymbols];
 
-  const [gainers, losers] = await Promise.all([
-    deps.getGainersSince8am(topN),
-    deps.getLosersSince8am(topN),
-  ]);
+  const volumeTopN = deps.volumeTopN ?? 50;
+  const fetchTasks = [
+    getGainers(topN),
+    getLosers(topN),
+  ];
+  if (volumeTopN > 0 && deps.getTopByVolume) {
+    fetchTasks.push(deps.getTopByVolume(volumeTopN));
+  }
+  const results = await Promise.all(fetchTasks);
+  const gainers = results[0];
+  const losers = results[1];
+  const volumeTop = volumeTopN > 0 && deps.getTopByVolume ? results[2] : { items: [] };
 
   const next = new Set([
     ...gainers.items.map(i => i.symbol.toUpperCase()),
     ...losers.items.map(i => i.symbol.toUpperCase()),
+    ...volumeTop.items.map(i => i.symbol.toUpperCase()),
   ]);
 
+  let rightSideItems = [];
+  if (deps?.scanRightSide) {
+    try {
+      rightSideItems = await deps.scanRightSide({
+        limit: deps.rightSideScanLimit ?? 200,
+        filterTF: '1h',
+        concurrency: 3,
+      });
+      for (const item of rightSideItems) {
+        next.add(item.symbol.toUpperCase());
+      }
+    } catch (e) {
+      console.warn(`  ⚠ 右侧交易扫描失败: ${e.message}`);
+    }
+  }
+
   watchSymbols = next;
-  lastRefreshDateKey = gainers.meta?.baselineDate || dateKey;
+  const boardLabel = use24hBoard ? '24h榜' : '8点榜';
+  lastRefreshDateKey = use24hBoard
+    ? (() => {
+      const p = getShanghaiParts();
+      return `${p.year}-${p.month}-${p.day}`;
+    })()
+    : (gainers.meta?.baselineDate || dateKey);
   gainerList = gainers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
   loserList = losers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
+  rightSideList = rightSideItems.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
+  volumeTopList = volumeTop.items.map(i => ({ symbol: i.symbol.toUpperCase(), volume: i.volume }));
   applyPinnedToWatch();
 
+  lastRefreshAt = Date.now();
   deps.onWatchlistUpdated?.([...watchSymbols], prevSymbols);
 
   await persistWatchlist({
     gainers: gainerList,
     losers: loserList,
+    rightSide: rightSideList,
+    volumeTop: volumeTopList,
   });
 
   const labels = [...watchSymbols].slice(0, 12).map(s => s.replace(/USDT$/, '')).join(', ');
   const suffix = watchSymbols.size > 12 ? ` 等 ${watchSymbols.size} 个` : '';
   const pinNote = pinnedSymbols.size ? ` · 固定 ${[...pinnedSymbols].map(s => s.replace(/USDT$/, '')).join(',')}` : '';
-  console.log(`  📋 聪明钱监控池已更新 (${lastRefreshDateKey} 8点榜 Top${topN}+Top${topN}${pinNote}): ${labels}${suffix}`);
+  const volumeNote = volumeTopN > 0 ? ` + 交易额 Top${volumeTopN}` : '';
+  const boardNote = use24hBoard ? `24h榜 Top${topN}+Top${topN}` : `8点榜 Top${topN}+Top${topN}`;
+  console.log(`  📋 聪明钱监控池已更新 (${lastRefreshDateKey} ${boardNote}${volumeNote}${pinNote}): ${labels}${suffix}`);
 
   return {
     symbols: [...watchSymbols],
@@ -197,6 +273,7 @@ function scheduleNextRefresh() {
   refreshTimer = setTimeout(async () => {
     try {
       await refreshSmartTrendWatchlist({ force: true });
+      await deps.onDaily8am?.([...watchSymbols]);
     } catch (e) {
       console.warn(`  ⚠ 监控池刷新失败: ${e.message}`);
     }
@@ -221,7 +298,12 @@ export async function startSmartTrendWatchlistScheduler() {
   }
 
   const topN = deps.topN ?? 20;
+  const volumeTopN = deps.volumeTopN ?? 50;
   const pinNote = pinnedSymbols.size ? ` + 固定 ${[...pinnedSymbols].map(s => s.replace(/USDT$/, '')).join(',')}` : '';
-  console.log(`  📋 聪明钱动态监控池: 8点涨幅榜 Top${topN} + 跌幅榜 Top${topN}${pinNote} · 每日 08:00 上海刷新 · 当前 ${watchSymbols.size} 个`);
+  const volumeNote = volumeTopN > 0 ? ` + 交易额 Top${volumeTopN}` : '';
+  const boardNote = (deps?.boardPeriod === '24h')
+    ? `24h涨幅榜 Top${topN} + 24h跌幅榜 Top${topN}`
+    : `8点涨幅榜 Top${topN} + 跌幅榜 Top${topN}`;
+  console.log(`  📋 聪明钱动态监控池: ${boardNote}${volumeNote}${pinNote} · 每日 08:00 上海刷新 · 当前 ${watchSymbols.size} 个`);
   scheduleNextRefresh();
 }

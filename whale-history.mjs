@@ -105,6 +105,19 @@ export async function getWhaleHistory(symbol, hours = 72) {
   };
 }
 
+export async function getWhaleHistoryBulk(symbols, hours = 24) {
+  await saveQueue;
+  await ensureHistoryLoaded();
+  const h = Math.max(1, parseInt(hours, 10) || 24);
+  const cutoff = Date.now() - h * 3600 * 1000;
+  const result = {};
+  for (const sym of symbols) {
+    const upper = sym.toUpperCase();
+    result[upper] = (history[upper] || []).filter(p => p.ts >= cutoff);
+  }
+  return result;
+}
+
 export async function startWhaleCollector() {
   if (collectorTimer) return;
   await ensureHistoryLoaded();
