@@ -4,6 +4,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildSmartTrendDecision, serializeSmartTrendDecision } from '../smart-trend-decision.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -113,6 +114,12 @@ async function main() {
   const allRows = [...gainerRows, ...loserRows, ...pinnedRows, ...rightSideRows, ...volumeRows];
   const highlightPct = 10;
   const totalBig = allRows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
+  const decisionPush = buildSmartTrendDecision({
+    boards,
+    highlightPct,
+    previousState: {},
+    now: watchlist.updatedAt || Date.now(),
+  });
 
   const snapshot = {
     capturedAt: watchlist.updatedAt || Date.now(),
@@ -132,6 +139,7 @@ async function main() {
       topN: watchlist.topN,
     },
     boards,
+    decisionPush: serializeSmartTrendDecision(decisionPush),
     stats: {
       totalCoins: allRows.length,
       totalBig,

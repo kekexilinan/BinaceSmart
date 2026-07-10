@@ -4760,6 +4760,307 @@
       ]
     }
   ],
+  "decisionPush": {
+    "capturedAt": 1783641671407,
+    "summary": {
+      "verdict": "多空分歧",
+      "template": "orange",
+      "advice": "重点看 5 个，观察 4 个；反向信号先要求连续确认，避免小时级来回反手。",
+      "actionCount": 5,
+      "watchCount": 4,
+      "invalidatedCount": 0,
+      "longCount": 2,
+      "shortCount": 3,
+      "reversalCount": 0,
+      "oldVerdict": "",
+      "dedupe": {
+        "rawRows": 181,
+        "uniqueRows": 131,
+        "savedRows": 50
+      }
+    },
+    "action": [
+      {
+        "symbol": "TACUSDT",
+        "label": "TAC",
+        "tradeView": "pump_risk",
+        "tradeViewLabel": "冲高风险观察",
+        "side": "short",
+        "score": 100,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#1",
+          "右侧",
+          "额#10"
+        ],
+        "change24h": 73.601,
+        "change8am": 73.601,
+        "ratio": 0.2179,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00012303,
+        "volume": 102785810.76223,
+        "reasons": [
+          "多榜共振",
+          "24h +73.6%",
+          "成交额#10",
+          "右侧形态"
+        ]
+      },
+      {
+        "symbol": "USUSDT",
+        "label": "US",
+        "tradeView": "trend_long",
+        "tradeViewLabel": "趋势做多候选",
+        "side": "long",
+        "score": 100,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#2",
+          "右侧",
+          "额#14"
+        ],
+        "change24h": 55.265,
+        "change8am": 55.265,
+        "ratio": 1.8291,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00049108,
+        "volume": 88375062.5549,
+        "reasons": [
+          "多榜共振",
+          "24h +55.3%",
+          "右侧形态",
+          "聪明钱偏多 1.83"
+        ]
+      },
+      {
+        "symbol": "ESPORTSUSDT",
+        "label": "ESPORTS",
+        "tradeView": "pump_risk",
+        "tradeViewLabel": "冲高风险观察",
+        "side": "short",
+        "score": 100,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#3",
+          "右侧",
+          "额#15"
+        ],
+        "change24h": 32.776,
+        "change8am": 32.776,
+        "ratio": 0.3871,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00029414,
+        "volume": 83890987.59615,
+        "reasons": [
+          "多榜共振",
+          "24h +32.8%",
+          "右侧形态",
+          "聪明钱偏空 0.39"
+        ]
+      },
+      {
+        "symbol": "EVAAUSDT",
+        "label": "EVAA",
+        "tradeView": "rebound_watch",
+        "tradeViewLabel": "超跌反弹观察",
+        "side": "long",
+        "score": 100,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "跌幅#2",
+          "右侧",
+          "额#2"
+        ],
+        "change24h": -19.684,
+        "change8am": -19.684,
+        "ratio": 2.7092,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00005,
+        "volume": 450451304.84434,
+        "reasons": [
+          "多榜共振",
+          "24h -19.7%",
+          "成交额#2",
+          "右侧形态"
+        ]
+      },
+      {
+        "symbol": "TAGUSDT",
+        "label": "TAG",
+        "tradeView": "pump_risk",
+        "tradeViewLabel": "冲高风险观察",
+        "side": "short",
+        "score": 94,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#4",
+          "右侧",
+          "额#3"
+        ],
+        "change24h": 27.97,
+        "change8am": 27.97,
+        "ratio": 0.6511,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00013052,
+        "volume": 224483496.544568,
+        "reasons": [
+          "多榜共振",
+          "24h +28.0%",
+          "成交额#3",
+          "右侧形态"
+        ]
+      }
+    ],
+    "watch": [
+      {
+        "symbol": "LABUSDT",
+        "label": "LAB",
+        "tradeView": "distribution",
+        "tradeViewLabel": "聪明钱派发风险",
+        "side": "short",
+        "score": 94,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "跌幅#7",
+          "右侧",
+          "额#1"
+        ],
+        "change24h": -9.108,
+        "change8am": -9.108,
+        "ratio": 0.326,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00046493,
+        "volume": 786316206.9393,
+        "reasons": [
+          "多榜共振",
+          "24h -9.1%",
+          "成交额#1",
+          "右侧形态"
+        ]
+      },
+      {
+        "symbol": "BASEDUSDT",
+        "label": "BASED",
+        "tradeView": "pump_risk",
+        "tradeViewLabel": "冲高风险观察",
+        "side": "short",
+        "score": 85,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#5",
+          "右侧",
+          "额#23"
+        ],
+        "change24h": 27.852,
+        "change8am": 27.852,
+        "ratio": 0.6044,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00005,
+        "volume": 63896782.81096,
+        "reasons": [
+          "多榜共振",
+          "24h +27.9%",
+          "右侧形态",
+          "聪明钱偏空 0.60"
+        ]
+      },
+      {
+        "symbol": "POWERUSDT",
+        "label": "POWER",
+        "tradeView": "distribution",
+        "tradeViewLabel": "聪明钱派发风险",
+        "side": "short",
+        "score": 84,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "跌幅#12",
+          "右侧",
+          "额#9"
+        ],
+        "change24h": -7.476,
+        "change8am": -7.476,
+        "ratio": 0.291,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": 0.00005,
+        "volume": 105200571.74572,
+        "reasons": [
+          "多榜共振",
+          "成交额#9",
+          "右侧形态",
+          "聪明钱偏空 0.29"
+        ]
+      },
+      {
+        "symbol": "SENTUSDT",
+        "label": "SENT",
+        "tradeView": "pump_risk",
+        "tradeViewLabel": "冲高风险观察",
+        "side": "short",
+        "score": 80,
+        "confidence": "高",
+        "status": "new",
+        "statusLabel": "新出现",
+        "streak": 1,
+        "sourceTags": [
+          "涨幅#6",
+          "右侧",
+          "额#20"
+        ],
+        "change24h": 24.89,
+        "change8am": 24.89,
+        "ratio": 0.7185,
+        "ratioDeltaPct": null,
+        "ratio8amDeltaPct": 0,
+        "fundingRate": -0.00208024,
+        "volume": 75576387.91386,
+        "reasons": [
+          "多榜共振",
+          "24h +24.9%",
+          "右侧形态",
+          "聪明钱偏空 0.72"
+        ]
+      }
+    ],
+    "invalidated": [],
+    "stats": {
+      "rawRows": 181,
+      "uniqueRows": 131,
+      "savedRows": 50,
+      "totalCandidates": 131
+    }
+  },
   "stats": {
     "totalCoins": 181,
     "totalBig": 0,

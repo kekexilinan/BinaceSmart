@@ -6,10 +6,16 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchSmartSignal, analyzeSmartSignal } from './scan-smart-signal.mjs';
 import { registerActiveSymbol } from './whale-history.mjs';
+import {
+  buildSmartTrendDecision,
+  buildSmartTrendDecisionElements,
+  serializeSmartTrendDecision,
+} from './smart-trend-decision.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const STATE_FILE = join(DATA_DIR, 'smart-trend-state.json');
+const DECISION_STATE_FILE = join(DATA_DIR, 'smart-trend-decision-state.json');
 const MOCK_PUSH_FILE = join(DATA_DIR, 'smart-trend-push-mock.json');
 
 let deps = null;
@@ -19,7 +25,10 @@ let digestTimer = null;
 const lastState = new Map();
 /** @type {{ last8amCaptureDateKey?: string }} */
 let stateMeta = {};
+/** @type {Record<string, object>} */
+let decisionState = {};
 let saveQueue = Promise.resolve();
+let decisionSaveQueue = Promise.resolve();
 
 function getShanghaiParts(date = new Date()) {
   const parts = {};
@@ -123,6 +132,27 @@ function queueSaveState() {
   }).catch(() => {});
 }
 
+async function loadDecisionState() {
+  try {
+    const raw = await readFile(DECISION_STATE_FILE, 'utf8');
+    const obj = JSON.parse(raw);
+    decisionState = obj?.symbols && typeof obj.symbols === 'object' ? obj.symbols : obj;
+  } catch {
+    decisionState = {};
+  }
+}
+
+function queueSaveDecisionState(nextState) {
+  decisionState = nextState || {};
+  decisionSaveQueue = decisionSaveQueue.then(async () => {
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(DECISION_STATE_FILE, JSON.stringify({
+      updatedAt: Date.now(),
+      symbols: decisionState,
+    }), 'utf8');
+  }).catch(() => {});
+}
+
 async function seedFromWhaleHistory(symbol) {
   if (!deps?.getWhaleHistory) return;
   const sym = symbol.toUpperCase();
@@ -176,6 +206,7 @@ function resolveWatchSymbols() {
 export async function initSmartTrendMonitor(dependencies) {
   deps = dependencies;
   await loadPersistedState();
+  await loadDecisionState();
   for (const sym of resolveWatchSymbols() || []) {
     registerActiveSymbol(sym);
     if (!lastState.has(sym.toUpperCase())) {
@@ -826,6 +857,13 @@ export async function runSmartTrendPush({ force = false } = {}) {
     let sent = 0;
     const mergeCards = deps.mergeCards !== false;
     const outlook = computeMarketOutlook(enriched);
+    const decisionPush = buildSmartTrendDecision({
+      boards: boards.filter(b => b.rows.length),
+      outlook,
+      highlightPct,
+      previousState: decisionState,
+    });
+    queueSaveDecisionState(decisionPush.nextState);
 
     const totalCoins = gainerRows.length + loserRows.length + pinnedRows.length + rightSideRows.length + volumeRows.length;
     const totalBig = [...gainerRows, ...loserRows, ...pinnedRows, ...rightSideRows, ...volumeRows]
@@ -854,6 +892,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
         rows: b.rows.map(serializePushRow),
       })),
       outlook,
+      decisionPush: serializeSmartTrendDecision(decisionPush),
       stats: {
         totalCoins,
         totalBig,
@@ -862,7 +901,23 @@ export async function runSmartTrendPush({ force = false } = {}) {
       },
     });
 
-    if (mergeCards) {
+    if (deps.decisionEnabled && deps.sendDecisionCard) {
+      try {
+        const elements = buildSmartTrendDecisionElements(decisionPush);
+        await deps.sendDecisionCard(
+          `🎯 聪明钱决策摘要 · ${decisionPush.summary.verdict}`,
+          elements,
+          decisionPush.summary.template,
+        );
+        console.log(`  ✓ 聪明钱决策摘要已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length} · 去重 ${decisionPush.stats.savedRows} 行`);
+      } catch (e) {
+        console.warn(`  ⚠ 聪明钱决策摘要推送失败: ${e.message}`);
+      }
+    }
+
+    if (!deps.feishuEnabled) {
+      console.log('  ⏭ 旧聪明钱榜单推送跳过: FEISHU_WEBHOOK 未配置');
+    } else if (mergeCards) {
       const mergedElements = buildMergedSmartTrendElements({
         boards: boards.filter(b => b.rows.length),
         outlook,
@@ -928,7 +983,8 @@ export function startSmartTrendScheduler() {
     ? `${syms.slice(0, 10).map(s => s.replace(/USDT$/, '')).join(', ')} 等 ${syms.length} 个`
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
-  console.log(`  📊 聪明钱榜单推送: 上海时间每整点 · ${deps.mergeCards !== false ? '单卡合并推送' : '分卡推送'} · 24h涨跌幅榜+交易额Top+固定+右侧+总体研判 · 监控 ${watchLabel || '（池为空）'}`);
+  const decisionNote = deps.decisionEnabled ? ' + 新决策摘要' : '';
+  console.log(`  📊 聪明钱榜单推送: 上海时间每整点 · ${deps.mergeCards !== false ? '单卡合并推送' : '分卡推送'}${decisionNote} · 24h涨跌幅榜+交易额Top+固定+右侧+总体研判 · 监控 ${watchLabel || '（池为空）'}`);
 
   const scheduleNext = () => {
     const next = getNextHourShanghai();
