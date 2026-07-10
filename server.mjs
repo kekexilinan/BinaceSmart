@@ -563,7 +563,9 @@ const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
     .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
 );
 
-const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && !!FEISHU_WEBHOOK;
+const SMART_TREND_DECISION_WEBHOOK = process.env.SMART_TREND_DECISION_WEBHOOK || FEISHU_WEBHOOK;
+const SMART_TREND_DECISION_ENABLED = process.env.SMART_TREND_DECISION_ENABLED !== 'false' && !!SMART_TREND_DECISION_WEBHOOK;
+const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && (!!FEISHU_WEBHOOK || SMART_TREND_DECISION_ENABLED);
 const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '60', 10);
 const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
 const SMART_TREND_RATIO_CHANGE_PCT = parseFloat(process.env.SMART_TREND_RATIO_CHANGE_PCT || '10', 10);
@@ -608,8 +610,8 @@ async function sendFeishu(title, content) {
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
-async function sendFeishuCardV2(title, elements, template = 'blue') {
-  if (!FEISHU_WEBHOOK) throw new Error('FEISHU_WEBHOOK 未配置');
+async function sendFeishuCardV2(title, elements, template = 'blue', webhook = FEISHU_WEBHOOK) {
+  if (!webhook) throw new Error('飞书 webhook 未配置');
   const body = {
     msg_type: 'interactive',
     card: {
@@ -622,7 +624,7 @@ async function sendFeishuCardV2(title, elements, template = 'blue') {
   let lastErr = null;
   for (let attempt = 0; attempt < 4; attempt++) {
     if (attempt > 0) await sleep(3000 * attempt);
-    const res = await fetch(FEISHU_WEBHOOK, {
+    const res = await fetch(webhook, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: payload,
@@ -2094,6 +2096,8 @@ server.listen(PORT, () => {
       ? () => refreshSmartTrendWatchlist({ force: false })
       : undefined,
     sendFeishuCard: sendFeishuCardV2,
+    decisionEnabled: SMART_TREND_DECISION_ENABLED,
+    sendDecisionCard: (title, elements, template) => sendFeishuCardV2(title, elements, template, SMART_TREND_DECISION_WEBHOOK),
     getWhaleHistory,
     getWhaleHistoryBulk,
     batchEnrichDigest: batchEnrichSmartTrendDigest,
