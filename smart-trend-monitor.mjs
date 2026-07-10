@@ -11,6 +11,7 @@ import {
   buildSmartTrendDecisionElements,
   serializeSmartTrendDecision,
 } from './smart-trend-decision.mjs';
+import { RATIO_WARN_PCT, changeTrendLabel, tradeHintLabel, ratioDeltaLabel, ratioDeltaDisplay, ratioCellDisplay, priceCellDisplay } from './smart-trend-labels.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
@@ -57,42 +58,6 @@ export function getNextHourShanghai(now = new Date()) {
   const nextDay = new Date(`${dateKey}T00:00:00+08:00`);
   nextDay.setDate(nextDay.getDate() + 1);
   return nextDay;
-}
-
-const RATIO_WARN_PCT = 5;
-
-function ratioDeltaLabel(pct) {
-  if (pct == null || Number.isNaN(pct)) return '-';
-  return pct >= 0 ? `+${pct.toFixed(1)}%` : `${pct.toFixed(1)}%`;
-}
-
-function ratioDeltaDisplay(pct, strongPct = 10) {
-  if (pct == null || Number.isNaN(pct)) return '-';
-  const abs = Math.abs(pct);
-  const text = ratioDeltaLabel(pct);
-  if (abs >= strongPct) return pct > 0 ? `🔥📈 ${text}` : `🔥📉 ${text}`;
-  if (abs >= RATIO_WARN_PCT) return pct > 0 ? `⚡📈 ${text}` : `⚡📉 ${text}`;
-  return text;
-}
-
-function changeTrendLabel(row, strongPct = 10) {
-  if (row.ratioDeltaPct == null) return '— 首次';
-  const d = row.ratioDeltaPct;
-  if (d >= strongPct) return '🔥 变多';
-  if (d <= -strongPct) return '🔥 变少';
-  if (d >= RATIO_WARN_PCT) return '⚡ 变多';
-  if (d <= -RATIO_WARN_PCT) return '⚡ 变少';
-  if (Math.abs(d) < 0.05) return '持平';
-  return d > 0 ? '微增' : '微减';
-}
-
-function tradeHintLabel(pct, strongPct = 10) {
-  if (pct == null || Number.isNaN(pct)) return '-';
-  if (pct >= strongPct) return '📈 考虑做多';
-  if (pct >= RATIO_WARN_PCT) return '📈 偏做多';
-  if (pct <= -strongPct) return '📉 考虑做空';
-  if (pct <= -RATIO_WARN_PCT) return '📉 偏做空';
-  return '—';
 }
 
 function sortByRatioChange(rows, tieBreakFn) {
@@ -417,6 +382,11 @@ function finalizeMarketState(rows) {
     const cur = lastState.get(r.symbol) || {};
     r.prevPrice = cur.initialized && cur.price > 0 ? cur.price : null;
     r.prevFundingRate = cur.initialized && cur.fundingRate != null ? cur.fundingRate : null;
+    if (r.prevPrice != null && r.prevPrice > 0 && r.price > 0) {
+      r.priceDeltaPct = ((r.price - r.prevPrice) / r.prevPrice) * 100;
+    } else {
+      r.priceDeltaPct = null;
+    }
     if (r.fundingRate != null && r.prevFundingRate != null) {
       const diff = r.fundingRate - r.prevFundingRate;
       r.fundingDeltaPct = r.prevFundingRate !== 0
@@ -451,41 +421,27 @@ function fmtPriceChangePct(v) {
   return `${v >= 0 ? '+' : ''}${v.toFixed(1)}%`;
 }
 
+const DIGEST_TABLE_MAX_ROWS = 15;
+
 function buildDigestTableRows(rows, highlightPct) {
-  return rows.map(r => {
-    const trend = changeTrendLabel(r, highlightPct);
-    const ratioText = r.prevRatio != null
-      ? `${r.prevRatio.toFixed(2)}→${r.ratio.toFixed(2)}`
-      : r.ratio.toFixed(2);
-    return {
-      coin: `${r.pinned ? '📌 ' : ''}[${r.badge}] ${r.label}`,
-      chg24h: fmtPriceChangePct(r.change24h),
-      chg8am: fmtPriceChangePct(r.change8am),
-      chg1h: trend,
-      ratio: ratioText,
-      delta: ratioDeltaDisplay(r.ratioDeltaPct, highlightPct),
-      delta8am: ratioDeltaDisplay(r.ratio8amDeltaPct, highlightPct),
-      hints8am: r.hints8amLabel || '-',
-      hint: tradeHintLabel(r.ratio8amDeltaPct, highlightPct),
-      price: priceChangeLabel(r.prevPrice, r.price),
-      mc: r.marketCapLabel || '-',
-      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
-    };
-  });
+  return rows.map(r => ({
+    coin: `${r.pinned ? '📌 ' : ''}${r.label}`,
+    ratio: ratioCellDisplay(r, highlightPct),
+    price: priceCellDisplay(r, highlightPct),
+    hints8am: r.hints8amLabel || '-',
+    hint: tradeHintLabel(r.ratio8amDeltaPct, highlightPct),
+    mc: r.marketCapLabel || '-',
+    funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+  }));
 }
 
 const DIGEST_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
-  { name: 'chg24h', display_name: '24h', data_type: 'text', width: 'auto' },
-  { name: 'chg8am', display_name: '8am', data_type: 'text', width: 'auto' },
-  { name: 'price', display_name: '价格Δ', data_type: 'text', width: 'auto' },
-  { name: 'chg1h', display_name: '1h', data_type: 'text', width: 'auto' },
-  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: 'auto' },
-  { name: 'delta', display_name: '1hΔ', data_type: 'text', width: 'auto' },
-  { name: 'delta8am', display_name: '8amΔ', data_type: 'text', width: 'auto' },
-  { name: 'hints8am', display_name: '8am推', data_type: 'text', width: 'auto' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
+  { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
+  { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
-  { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
+  { name: 'mc', display_name: '市值', data_type: 'text', width: '80px' },
   { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
 ];
 
@@ -635,27 +591,28 @@ function buildMarketOutlookElements(rows, outlook, { intervalMin = 60, highlight
 function buildBoardSectionElements(rows, {
   boardLabel = '涨幅榜',
   highlightPct = 10,
-  pageSize = 10,
   topN = 30,
   merged = false,
   dateKey = '',
 } = {}) {
-  const bigMoves = rows
+  const displayRows = rows.slice(0, DIGEST_TABLE_MAX_ROWS);
+  const bigMoves = displayRows
     .filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct)
     .sort((a, b) => Math.abs(b.ratioDeltaPct) - Math.abs(a.ratioDeltaPct));
 
   const elements = [];
   if (merged) {
     const bigNote = bigMoves.length ? ` · ${bigMoves.length}个≥${highlightPct}%变化` : '';
+    const topNote = topN ? `Top${Math.min(topN, DIGEST_TABLE_MAX_ROWS)}` : '';
     elements.push({
       tag: 'markdown',
-      content: `**${boardLabel}** · ${rows.length} 个${topN ? `Top${topN}` : ''}${bigNote}`,
+      content: `**${boardLabel}** · ${displayRows.length} 个${topNote ? ` · ${topNote}` : ''}${bigNote}`,
     });
   } else {
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     elements.push({
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**${boardLabel}** · ${rows.length} 个${dateKey ? ` · ${dateKey}` : ''}\n_24h/8am=价格涨跌幅 · 1hΔ=相对上次推送聪明钱 · 8amΔ=相对8点聪明钱 · 参考=基于8amΔ_`,
+      content: `**⏰ ${now}**\n**${boardLabel}** · ${displayRows.length} 个${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
     });
   }
 
@@ -669,23 +626,24 @@ function buildBoardSectionElements(rows, {
     });
   }
 
+  const tableRows = buildDigestTableRows(displayRows, highlightPct);
   elements.push({
     tag: 'table',
-    page_size: Math.max(5, Math.min(20, pageSize)),
+    page_size: tableRows.length,
     row_height: 'low',
     freeze_first_column: true,
     columns: DIGEST_TABLE_COLUMNS,
-    rows: buildDigestTableRows(rows, highlightPct),
+    rows: tableRows,
   });
 
   return elements;
 }
 
-function buildMergedSmartTrendElements({ boards, outlook, enriched, intervalMin, highlightPct, pageSize, dateKey, topN }) {
+function buildMergedSmartTrendElements({ boards, outlook, enriched, intervalMin, highlightPct, dateKey, topN }) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const elements = [{
     tag: 'markdown',
-    content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min\n_24h/8am=价格涨跌幅 · 1hΔ/8amΔ=聪明钱多空比变化 · 参考=基于8amΔ_`,
+    content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
   }];
 
   for (const board of boards) {
@@ -693,7 +651,6 @@ function buildMergedSmartTrendElements({ boards, outlook, enriched, intervalMin,
     elements.push(...buildBoardSectionElements(board.rows, {
       boardLabel: board.label,
       highlightPct,
-      pageSize,
       topN: board.key === 'gainer' || board.key === 'loser' ? topN : undefined,
       merged: true,
       dateKey,
@@ -724,6 +681,8 @@ function serializePushRow(r) {
     change8am: r.change8am ?? null,
     price: r.price ?? null,
     prevPrice: r.prevPrice ?? null,
+    price8am: r.price8am ?? null,
+    priceDeltaPct: r.priceDeltaPct ?? null,
     fundingRate: r.fundingRate ?? null,
     prevFundingRate: r.prevFundingRate ?? null,
     fundingDeltaPct: r.fundingDeltaPct ?? null,
@@ -745,8 +704,6 @@ export async function runSmartTrendPush({ force = false } = {}) {
   running = true;
   const intervalMin = deps.intervalMin ?? 60;
   const highlightPct = deps.ratioChangePct ?? 10;
-  const pageSize = deps.digestPageSize ?? 10;
-
   try {
     await deps.refreshWatchlist?.();
     const watchSymbolsAfterRefresh = resolveWatchSymbols();
@@ -783,28 +740,27 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
     const enrichedMap = new Map(enriched.map(r => [r.symbol, r]));
 
+    const mapBoardList = (boardList) => boardList
+      .map(({ symbol, change, pinned = false }) => {
+        const row = enrichedMap.get(symbol.toUpperCase());
+        if (!row) return null;
+        return { ...row, change24h: row.change24h ?? change, change8am: row.change8am ?? change, pinned };
+      })
+      .filter(Boolean);
+
     const buildBoardRows = (boardList, tieBreakFn) => sortByRatioChange(
-      boardList
-        .map(({ symbol, change, pinned = false }) => {
-          const row = enrichedMap.get(symbol.toUpperCase());
-          if (!row) return null;
-          return { ...row, change24h: row.change24h ?? change, change8am: row.change8am ?? change, pinned };
-        })
-        .filter(Boolean),
+      mapBoardList(boardList),
       tieBreakFn,
     );
+
+    /** 涨幅/跌幅榜：保持 watchlist 榜单位次，不按聪明钱变化重排 */
+    const buildRankedBoardRows = (boardList) => mapBoardList(boardList);
 
     const pinnedSet = new Set((groups.pinned || []).map(s => s.toUpperCase()));
     const excludePinned = (list) => (list || []).filter(item => !pinnedSet.has(item.symbol.toUpperCase()));
 
-    const gainerRows = buildBoardRows(
-      excludePinned(groups.gainers),
-      (a, b) => (b.change24h ?? b.change8am ?? 0) - (a.change24h ?? a.change8am ?? 0),
-    );
-    const loserRows = buildBoardRows(
-      excludePinned(groups.losers),
-      (a, b) => (a.change24h ?? a.change8am ?? 0) - (b.change24h ?? b.change8am ?? 0),
-    );
+    const gainerRows = buildRankedBoardRows(excludePinned(groups.gainers));
+    const loserRows = buildRankedBoardRows(excludePinned(groups.losers));
     const pinnedRows = buildPinnedBoardRows(groups.pinned, enrichedMap);
     const pinLabels = (groups.pinned || []).map(s => s.replace(/USDT$/, '')).join(', ');
 
@@ -903,13 +859,13 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
     if (deps.decisionEnabled && deps.sendDecisionCard) {
       try {
-        const elements = buildSmartTrendDecisionElements(decisionPush);
+        const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct });
         await deps.sendDecisionCard(
-          `🎯 聪明钱决策摘要 · ${decisionPush.summary.verdict}`,
+          `🎯 聪明钱操作清单 · ${decisionPush.summary.verdict}`,
           elements,
           decisionPush.summary.template,
         );
-        console.log(`  ✓ 聪明钱决策摘要已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length} · 去重 ${decisionPush.stats.savedRows} 行`);
+        console.log(`  ✓ 聪明钱操作清单已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length}`);
       } catch (e) {
         console.warn(`  ⚠ 聪明钱决策摘要推送失败: ${e.message}`);
       }
@@ -924,7 +880,6 @@ export async function runSmartTrendPush({ force = false } = {}) {
         enriched,
         intervalMin,
         highlightPct,
-        pageSize,
         dateKey: groups.dateKey,
         topN: groups.topN ?? 30,
       });
@@ -941,7 +896,6 @@ export async function runSmartTrendPush({ force = false } = {}) {
         const elements = buildBoardDigestElements(board.rows, {
           boardLabel: board.label,
           highlightPct,
-          pageSize,
           dateKey: groups.dateKey,
           topN: groups.topN ?? 30,
         });

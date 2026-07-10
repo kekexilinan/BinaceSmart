@@ -338,6 +338,7 @@ async function batchEnrichSmartTrendDigest(rows) {
     return {
       ...r,
       price,
+      price8am: base && base > 0 ? base : null,
       change8am,
       change24h: change24hMap[r.symbol] ?? r.change24h ?? null,
       fundingRate: fr,

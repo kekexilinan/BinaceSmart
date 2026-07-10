@@ -1,4 +1,7 @@
+import { changeTrendLabel, tradeHintLabel, ratioCellDisplay } from './smart-trend-labels.mjs';
+
 const DECISION_STATE_MAX_AGE_MS = 48 * 3600 * 1000;
+const DECISION_TABLE_MAX_ROWS = 15;
 
 const VIEW_META = {
   trend_long: { label: '趋势做多候选', side: 'long', group: 'action' },
@@ -9,6 +12,142 @@ const VIEW_META = {
   distribution: { label: '聪明钱派发风险', side: 'short', group: 'watch' },
   neutral_watch: { label: '观望', side: 'neutral', group: 'watch' },
 };
+
+const ACTION_PLAYBOOK = {
+  trend_long: {
+    scene: '顺势',
+    action: '可轻仓顺势做多',
+    avoid: '勿重仓追高',
+    waitFor: '回踩不破 + 聪明钱继续偏多',
+    urgency: 'high',
+  },
+  rebound_watch: {
+    scene: '反转',
+    action: '等价格止跌确认后再轻仓做多',
+    avoid: '下跌途中抄底',
+    waitFor: '跌幅收窄 + 聪明钱由空转多',
+    urgency: 'medium',
+  },
+  accumulation: {
+    scene: '顺势',
+    action: '观察吸筹，可分批建多',
+    avoid: '单次重仓',
+    waitFor: '突破 + 量变',
+    urgency: 'medium',
+  },
+  pump_risk: {
+    scene: '反转',
+    action: '禁止追多；等冲高回落再考虑做空',
+    avoid: '暴涨中抄底或追多',
+    waitFor: '量能萎缩 + 聪明钱持续偏空',
+    urgency: 'high',
+  },
+  downtrend_risk: {
+    scene: '顺势',
+    action: '偏空看待，反弹做空',
+    avoid: '勿抄底',
+    waitFor: '反弹至阻力',
+    urgency: 'high',
+  },
+  distribution: {
+    scene: '反转',
+    action: '聪明钱派发，减持多单',
+    avoid: '勿加仓',
+    waitFor: '跌破支撑',
+    urgency: 'medium',
+  },
+  neutral_watch: {
+    scene: '观望',
+    action: '暂不操作',
+    avoid: '-',
+    waitFor: '方向明朗',
+    urgency: 'low',
+  },
+};
+
+const VERDICT_BULLETS = {
+  机会偏多: '总体偏多：顺势品种可轻仓跟进，反转品种等确认',
+  风险偏空: '总体偏空：禁止追多，关注冲高回落做空机会',
+  多空分歧: '方向不明：只观察不新开仓，等信号延续',
+  观望: '本小时无强信号，建议观望，继续跟踪聪明钱连续性',
+};
+
+function sceneTag(scene) {
+  if (scene === '顺势') return '【顺势】';
+  if (scene === '反转') return '【反转】';
+  return '【观望】';
+}
+
+function resolveActionGuide(item) {
+  const playbook = ACTION_PLAYBOOK[item.tradeView] || ACTION_PLAYBOOK.neutral_watch;
+
+  if (item.status === 'reversal_watch') {
+    return {
+      scene: playbook.scene,
+      sceneTag: sceneTag(playbook.scene),
+      action: '勿反手，等连续2h确认',
+      avoid: playbook.avoid,
+      urgency: 'low',
+    };
+  }
+
+  let action = playbook.action;
+  if (item.status === 'new') {
+    action = `先观察1h，${action}`;
+  } else if (item.status === 'strengthened') {
+    action = `信号加强，${action}`;
+  } else if (item.status === 'continued' && item.streak >= 3) {
+    action = `信号延续，可执行：${action}`;
+  } else if (item.status === 'reversed') {
+    action = `反转确认，${action}`;
+  }
+  if (item.status === 'weakened') {
+    action = `${action}；信号减弱，减仓观望`;
+  }
+
+  return {
+    scene: playbook.scene,
+    sceneTag: sceneTag(playbook.scene),
+    action,
+    avoid: playbook.avoid,
+    urgency: playbook.urgency,
+  };
+}
+
+function buildKeyEvidence(item, highlightPct = 10) {
+  const parts = [];
+  const trend = changeTrendLabel(item, highlightPct);
+  if (trend && trend !== '— 首次') parts.push(trend);
+  const change = fmtPct(item.change24h ?? item.change8am);
+  if (change !== '-') parts.push(`24h ${change}`);
+  const smartSide = item.side === 'long' ? '偏多' : item.side === 'short' ? '偏空' : '中性';
+  parts.push(`${smartSide}${fmtRatio(item.ratio)}`);
+  const hint = tradeHintLabel(item.ratio8amDeltaPct, highlightPct);
+  if (hint && hint !== '—' && hint !== '-') parts.push(hint);
+  return parts.slice(0, 3).join(' · ') || '-';
+}
+
+function buildHourlyActionBullets(action, summary) {
+  if (!action.length) {
+    return [VERDICT_BULLETS.观望];
+  }
+
+  const bullets = [VERDICT_BULLETS[summary.verdict] || VERDICT_BULLETS.观望];
+  const topItems = action
+    .map(item => ({ item, guide: resolveActionGuide(item) }))
+    .filter(({ guide }) => guide.urgency === 'high')
+    .slice(0, 2);
+
+  for (const { item, guide } of topItems) {
+    bullets.push(`${item.label} · ${guide.scene} · ${guide.action}（${item.statusLabel}）`);
+  }
+
+  return bullets.slice(0, 3);
+}
+
+function filterWatchForDisplay(watch) {
+  return watch.filter(i => i.score >= 70).slice(0, 3);
+}
 
 function num(v) {
   return typeof v === 'number' && Number.isFinite(v) ? v : null;
@@ -479,90 +618,129 @@ export function buildSmartTrendDecision({
   };
 }
 
-function decisionRows(items) {
-  return items.map(i => ({
-    coin: `**${i.label}**`,
-    view: i.tradeViewLabel,
-    state: i.statusLabel,
-    score: `${i.score}/100 ${i.confidence}`,
-    source: i.sourceTags.join(' / '),
-    change: fmtPct(i.change24h ?? i.change8am),
-    smart: `${i.side === 'long' ? '偏多' : i.side === 'short' ? '偏空' : '中性'} ${fmtRatio(i.ratio)}`,
-    reason: i.reasons.join('、') || '-',
-  }));
+function decisionRows(items, highlightPct = 10) {
+  return items.map(i => {
+    const guide = resolveActionGuide(i);
+    return {
+      coin: `**${i.label}**`,
+      scene: guide.sceneTag,
+      action: guide.action,
+      state: i.statusLabel,
+      evidence: buildKeyEvidence(i, highlightPct),
+    };
+  });
 }
 
-function decisionTable(title, items, pageSize = 5) {
+function decisionTable(title, items, highlightPct = 10) {
   if (!items.length) {
     return [{ tag: 'markdown', content: `**${title}**\n暂无` }];
   }
+  const displayItems = items.slice(0, DECISION_TABLE_MAX_ROWS);
+  const rows = decisionRows(displayItems, highlightPct);
   return [
     { tag: 'markdown', content: `**${title}**` },
     {
       tag: 'table',
-      page_size: pageSize,
+      page_size: rows.length,
       row_height: 'low',
       freeze_first_column: true,
       columns: [
         { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
-        { name: 'view', display_name: '视图', data_type: 'text', width: 'auto' },
+        { name: 'scene', display_name: '场景', data_type: 'text', width: 'auto' },
+        { name: 'action', display_name: '建议操作', data_type: 'text', width: 'auto' },
         { name: 'state', display_name: '连续性', data_type: 'text', width: 'auto' },
-        { name: 'score', display_name: '评分', data_type: 'text', width: 'auto' },
-        { name: 'source', display_name: '来源', data_type: 'text', width: 'auto' },
-        { name: 'change', display_name: '24h', data_type: 'text', width: 'auto' },
-        { name: 'smart', display_name: '聪明钱', data_type: 'text', width: 'auto' },
-        { name: 'reason', display_name: '原因', data_type: 'text', width: 'auto' },
+        { name: 'evidence', display_name: '关键依据', data_type: 'text', width: 'auto' },
       ],
-      rows: decisionRows(items),
+      rows,
+    },
+  ];
+}
+
+function changeDataRows(items, highlightPct = 10) {
+  return items.map(i => {
+    const side = i.side === 'long' ? '偏多' : i.side === 'short' ? '偏空' : '中性';
+    const ratioText = `${side} ${fmtRatio(i.ratio)}`;
+    return {
+      coin: `**${i.label}**`,
+      smart: ratioCellDisplay(i, highlightPct, ratioText),
+      hint: tradeHintLabel(i.ratio8amDeltaPct, highlightPct),
+      source: i.sourceTags.join(' / ') || '-',
+      score: `${i.score}/100 ${i.confidence}`,
+    };
+  });
+}
+
+function changeDataTable(title, items, highlightPct = 10) {
+  if (!items.length) return [];
+  const displayItems = items.slice(0, DECISION_TABLE_MAX_ROWS);
+  const rows = changeDataRows(displayItems, highlightPct);
+  return [
+    { tag: 'markdown', content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 参考=基于8amΔ_` },
+    {
+      tag: 'table',
+      page_size: rows.length,
+      row_height: 'low',
+      freeze_first_column: true,
+      columns: [
+        { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
+        { name: 'smart', display_name: '净多空比', data_type: 'text', width: 'auto' },
+        { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
+        { name: 'source', display_name: '来源', data_type: 'text', width: 'auto' },
+        { name: 'score', display_name: '评分', data_type: 'text', width: 'auto' },
+      ],
+      rows,
     },
   ];
 }
 
 function invalidatedElements(items) {
   if (!items.length) return [];
+  const rows = items.map(i => ({
+    coin: `**${i.label}**`,
+    action: '减仓或退出观望',
+    reason: i.reason,
+  }));
   return [
-    { tag: 'markdown', content: '**降级/失效**' },
+    { tag: 'markdown', content: '**已失效 · 上一小时重点退出**' },
     {
       tag: 'table',
-      page_size: 3,
+      page_size: rows.length,
       row_height: 'low',
       columns: [
         { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
-        { name: 'prev', display_name: '原视图', data_type: 'text', width: 'auto' },
-        { name: 'score', display_name: '原评分', data_type: 'text', width: 'auto' },
+        { name: 'action', display_name: '建议', data_type: 'text', width: 'auto' },
         { name: 'reason', display_name: '原因', data_type: 'text', width: 'auto' },
       ],
-      rows: items.map(i => ({
-        coin: `**${i.label}**`,
-        prev: i.previousView,
-        score: `${i.previousScore}/100`,
-        reason: i.reason,
-      })),
+      rows,
     },
   ];
 }
 
-export function buildSmartTrendDecisionElements(decision) {
+export function buildSmartTrendDecisionElements(decision, { highlightPct = 10 } = {}) {
   const now = new Date(decision.capturedAt).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
     hour12: false,
   });
   const { summary } = decision;
+  const watchDisplay = filterWatchForDisplay(decision.watch);
+  const bullets = buildHourlyActionBullets(decision.action, summary);
+  const dataItems = [...decision.action, ...watchDisplay];
+
   const lines = [
-    `**⏰ ${now}** · 聪明钱决策摘要`,
-    `**结论:** ${summary.verdict}`,
-    summary.advice,
+    `**⏰ ${now}** · 聪明钱操作清单`,
     '',
-    `去重: ${summary.dedupe.rawRows} 行 -> ${summary.dedupe.uniqueRows} 币，少看 ${summary.dedupe.savedRows} 行重复信息`,
-    `重点: 多 ${summary.longCount} / 空险 ${summary.shortCount} · 观察 ${summary.watchCount} · 反向待确认 ${summary.reversalCount}`,
+    '**【本小时怎么做】**',
+    ...bullets.map((b, i) => `${i + 1}. ${b}`),
+    '',
+    `重点 ${summary.actionCount} 个（多 ${summary.longCount} / 空 ${summary.shortCount}）· 观察 ${watchDisplay.length} 个`,
   ];
-  if (summary.oldVerdict) lines.push(summary.oldVerdict);
 
   return [
     { tag: 'markdown', content: lines.join('\n') },
-    ...decisionTable('重点候选', decision.action, 5),
-    ...decisionTable('观察名单', decision.watch, 4),
+    ...decisionTable('立刻关注', decision.action, highlightPct),
+    ...decisionTable('继续观察', watchDisplay, highlightPct),
+    ...changeDataTable('变化数据', dataItems, highlightPct),
     ...invalidatedElements(decision.invalidated),
-    { tag: 'markdown', content: '_方向反转默认需要连续确认；这里是决策线索，不是自动下单指令。_' },
+    { tag: 'markdown', content: '_非自动下单；方向反转需连续2h确认，避免小时级来回反手。_' },
   ];
 }
