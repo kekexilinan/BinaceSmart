@@ -5,6 +5,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSmartTrendDecision, serializeSmartTrendDecision } from '../smart-trend-decision.mjs';
+import { formatHints8amScore } from '../smart-trend-labels.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -38,9 +39,7 @@ function stateToRow(sym, s, change = null) {
     fundingRate: s.fundingRate ?? null,
     prevFundingRate: null,
     fundingDeltaPct: null,
-    hints8amLabel: s.longHints8am || s.shortHints8am
-      ? `${s.longHints8am ? `多${s.longHints8am}` : ''}${s.shortHints8am ? `空${s.shortHints8am}` : ''}`.replace(/^$/, '-')
-      : '-',
+    hints8amLabel: formatHints8amScore(s.longHints8am, s.shortHints8am),
     marketCapLabel: null,
     pinned: false,
     volumeRank: null,
@@ -84,7 +83,7 @@ async function main() {
   const pinnedRows = buildBoardRows(
     pinned.map(s => ({ symbol: s, change: 0 })),
     state,
-    (a, b) => Math.abs(b.ratio8amDeltaPct ?? 0) - Math.abs(a.ratio8amDeltaPct ?? 0),
+    () => 0,
   ).map(r => ({ ...r, pinned: true }));
   const rightSideRows = buildBoardRows(
     watchlist.rightSide,
@@ -97,13 +96,14 @@ async function main() {
     (a, b) => (b.volumeRank ?? 0) - (a.volumeRank ?? 0),
   );
 
-  const boards = [
-    { key: 'gainer', label: '📈 24h涨幅榜', template: 'green', rowCount: gainerRows.length, rows: gainerRows },
-    { key: 'loser', label: '📉 24h跌幅榜', template: 'red', rowCount: loserRows.length, rows: loserRows },
-  ];
+  const boards = [];
   if (pinnedRows.length) {
     boards.push({ key: 'pinned', label: '📌 固定监控', template: 'blue', rowCount: pinnedRows.length, rows: pinnedRows });
   }
+  boards.push(
+    { key: 'gainer', label: '📈 24h涨幅榜', template: 'green', rowCount: gainerRows.length, rows: gainerRows },
+    { key: 'loser', label: '📉 24h跌幅榜', template: 'red', rowCount: loserRows.length, rows: loserRows },
+  );
   if (rightSideRows.length) {
     boards.push({ key: 'rightSide', label: '📐 右侧交易', template: 'orange', rowCount: rightSideRows.length, rows: rightSideRows });
   }

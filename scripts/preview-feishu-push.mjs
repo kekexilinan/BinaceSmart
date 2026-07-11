@@ -4,7 +4,7 @@
 import { readFile } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { buildBoardDigestElements } from '../smart-trend-monitor.mjs';
+import { buildMergedSmartTrendElements } from '../smart-trend-monitor.mjs';
 import { buildSmartTrendDecision, buildSmartTrendDecisionElements } from '../smart-trend-decision.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -68,7 +68,7 @@ function reorderBoardsForPreview(mock) {
     .map(item => rowMap.get(item.symbol.toUpperCase()))
     .filter(Boolean));
 
-  return mock.boards.map(board => {
+  const reordered = mock.boards.map(board => {
     const rows = enrichMockRowsForPreview(board.rows || []);
     if (board.key === 'gainer') {
       return { ...board, rows: mapRanked(mock.watchlist?.gainers) };
@@ -78,24 +78,27 @@ function reorderBoardsForPreview(mock) {
     }
     return { ...board, rows };
   });
+
+  const pinnedBoard = reordered.find(b => b.key === 'pinned');
+  const others = reordered.filter(b => b.key !== 'pinned');
+  return pinnedBoard ? [pinnedBoard, ...others] : reordered;
 }
 
 function buildMergedPreviewElements(mock) {
   const boards = reorderBoardsForPreview(mock);
-  const elements = [{
+  const allRows = boards.flatMap(b => b.rows || []);
+  const elements = buildMergedSmartTrendElements({
+    boards,
+    outlook: mock.outlook,
+    enriched: allRows,
+    intervalMin: mock.intervalMin ?? 60,
+    highlightPct: mock.highlightPct ?? 10,
+    dateKey: mock.dateKey,
+  });
+  elements.unshift({
     tag: 'markdown',
-    content: `**🧪 格式预览（mock 数据）** · ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}\n_涨幅/跌幅榜按榜单位次取 Top15 · 净多空比在第 2 列 · 每表最多 15 行无分页_`,
-  }];
-  for (const board of boards) {
-    if (!board.rows?.length) continue;
-    elements.push(...buildBoardDigestElements(board.rows, {
-      boardLabel: board.label,
-      highlightPct: mock.highlightPct ?? 10,
-      merged: true,
-      topN: mock.watchlist?.topN,
-      dateKey: mock.dateKey,
-    }));
-  }
+    content: `**🧪 格式预览（mock 数据）** · ${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false })}`,
+  });
   return elements;
 }
 

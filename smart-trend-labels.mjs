@@ -150,11 +150,74 @@ export function priceCellDisplay(row, highlightPct = 10) {
   return `${compact}${PRICE_CELL_DETAIL_SEP}${detail}`;
 }
 
-export function tradeHintLabel(pct, strongPct = 10) {
+/** 8am 推送计分：多 +1、空 -1，显示总分 */
+export function formatHints8amScore(longC = 0, shortC = 0) {
+  const longN = longC || 0;
+  const shortN = shortC || 0;
+  if (!longN && !shortN) return '-';
+  const total = longN - shortN;
+  if (total > 0) return `+${total}`;
+  if (total < 0) return `${total}`;
+  return '0';
+}
+
+export function currentRatioShort(ratio) {
+  if (ratio == null || Number.isNaN(ratio)) return '-';
+  return Number(ratio).toFixed(2);
+}
+
+export function tradeHintLabel(pct, strongPct = 10, { ratio } = {}) {
   if (pct == null || Number.isNaN(pct)) return '-';
-  if (pct >= strongPct) return '📈 考虑做多';
-  if (pct >= RATIO_WARN_PCT) return '📈 偏做多';
+  if (pct >= strongPct) {
+    if (ratio != null && !Number.isNaN(ratio) && ratio <= 1) return '⚠️ 不宜追多';
+    return '📈 考虑做多';
+  }
+  if (pct >= RATIO_WARN_PCT) {
+    if (ratio != null && !Number.isNaN(ratio) && ratio <= 1) return '⚠️ 不宜追多';
+    return '📈 偏做多';
+  }
   if (pct <= -strongPct) return '📉 考虑做空';
   if (pct <= -RATIO_WARN_PCT) return '📉 偏做空';
   return '—';
+}
+
+/** 变多/变少最显著列表单行：净多空比 + 1h 变化 + 参考 */
+export function formatTopMoveItem(row, highlightPct = 10) {
+  const ratioPart = currentRatioShort(row.ratio);
+  const deltaPart = ratioDeltaDisplay(row.ratioDeltaPct, highlightPct);
+  const hintPart = tradeHintLabel(row.ratioDeltaPct, highlightPct, { ratio: row.ratio });
+  return `**${row.label}** ${ratioPart} ${deltaPart} ${hintPart}`;
+}
+
+export function fundingChangeLabel(prev, cur, deltaPct) {
+  const fmtRate = (v) => `${(v * 100).toFixed(4)}%`;
+  if (cur == null || Number.isNaN(cur)) return '-';
+  if (deltaPct != null && !Number.isNaN(deltaPct) && prev != null && !Number.isNaN(prev)) {
+    const sign = deltaPct >= 0 ? '+' : '';
+    return `${fmtRate(prev)}→${fmtRate(cur)} (${sign}${deltaPct.toFixed(1)}%)`;
+  }
+  if (prev != null && !Number.isNaN(prev)) return `${fmtRate(prev)}→${fmtRate(cur)}`;
+  return fmtRate(cur);
+}
+
+export const DIGEST_TABLE_COLUMNS = [
+  { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
+  { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
+  { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
+  { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
+  { name: 'mc', display_name: '市值', data_type: 'text', width: '80px' },
+  { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
+];
+
+export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true } = {}) {
+  return rows.map(r => ({
+    coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
+    ratio: ratioCellDisplay(r, highlightPct),
+    price: priceCellDisplay(r, highlightPct),
+    hints8am: r.hints8amLabel || '-',
+    hint: tradeHintLabel(r.ratio8amDeltaPct, highlightPct),
+    mc: r.marketCapLabel || '-',
+    funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+  }));
 }

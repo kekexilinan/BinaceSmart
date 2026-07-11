@@ -1,4 +1,4 @@
-import { changeTrendLabel, tradeHintLabel, ratioCellDisplay } from './smart-trend-labels.mjs';
+import { changeTrendLabel, tradeHintLabel, DIGEST_TABLE_COLUMNS, buildDigestTableRows } from './smart-trend-labels.mjs';
 
 const DECISION_STATE_MAX_AGE_MS = 48 * 3600 * 1000;
 const DECISION_TABLE_MAX_ROWS = 15;
@@ -221,12 +221,14 @@ function mergeRowsBySymbol(boards) {
         'change8am',
         'price',
         'prevPrice',
+        'priceDeltaPct',
         'fundingRate',
         'prevFundingRate',
         'fundingDeltaPct',
         'hints8amLabel',
         'marketCapLabel',
         'volumeRank',
+        'pinned',
       ]) {
         if (merged[field] == null && row[field] != null) merged[field] = row[field];
       }
@@ -430,9 +432,20 @@ function buildItem(row, highlightPct, previousState, now) {
     change24h: num(row.change24h),
     change8am: num(row.change8am),
     ratio: num(row.ratio),
+    prevRatio: num(row.prevRatio),
+    ratio8am: num(row.ratio8am),
     ratioDeltaPct: num(row.ratioDeltaPct),
     ratio8amDeltaPct: num(row.ratio8amDeltaPct),
+    direction: row.direction,
+    price: num(row.price),
+    prevPrice: num(row.prevPrice),
+    priceDeltaPct: num(row.priceDeltaPct),
+    hints8amLabel: row.hints8amLabel,
+    marketCapLabel: row.marketCapLabel,
     fundingRate: num(row.fundingRate),
+    prevFundingRate: num(row.prevFundingRate),
+    fundingDeltaPct: num(row.fundingDeltaPct),
+    pinned: row.pinned ?? hasSource(sources, 'pinned'),
     volume: num(row.volumeRank),
     reasons: buildReasons(row, sources, tradeView),
   };
@@ -656,38 +669,21 @@ function decisionTable(title, items, highlightPct = 10) {
   ];
 }
 
-function changeDataRows(items, highlightPct = 10) {
-  return items.map(i => {
-    const side = i.side === 'long' ? '偏多' : i.side === 'short' ? '偏空' : '中性';
-    const ratioText = `${side} ${fmtRatio(i.ratio)}`;
-    return {
-      coin: `**${i.label}**`,
-      smart: ratioCellDisplay(i, highlightPct, ratioText),
-      hint: tradeHintLabel(i.ratio8amDeltaPct, highlightPct),
-      source: i.sourceTags.join(' / ') || '-',
-      score: `${i.score}/100 ${i.confidence}`,
-    };
-  });
-}
-
 function changeDataTable(title, items, highlightPct = 10) {
   if (!items.length) return [];
   const displayItems = items.slice(0, DECISION_TABLE_MAX_ROWS);
-  const rows = changeDataRows(displayItems, highlightPct);
+  const rows = buildDigestTableRows(displayItems, highlightPct);
   return [
-    { tag: 'markdown', content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 参考=基于8amΔ_` },
+    {
+      tag: 'markdown',
+      content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
+    },
     {
       tag: 'table',
       page_size: rows.length,
       row_height: 'low',
       freeze_first_column: true,
-      columns: [
-        { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
-        { name: 'smart', display_name: '净多空比', data_type: 'text', width: 'auto' },
-        { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
-        { name: 'source', display_name: '来源', data_type: 'text', width: 'auto' },
-        { name: 'score', display_name: '评分', data_type: 'text', width: 'auto' },
-      ],
+      columns: DIGEST_TABLE_COLUMNS,
       rows,
     },
   ];
