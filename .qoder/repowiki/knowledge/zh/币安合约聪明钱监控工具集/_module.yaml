@@ -1,0 +1,20 @@
+schema_version: 1
+module_path: ""
+title: 币安合约聪明钱监控工具集
+scope:
+    - README.md
+    - .gitignore
+    - package.json
+    - pnpm-lock.yaml
+    - ecosystem.config.cjs
+    - .env.example
+    - .nvmrc
+    - market-cap-filter.mjs
+    - pump-smart-alert.mjs
+    - smart-money.mjs
+    - strategy-review.mjs
+    - tradfi-symbol-filter.mjs
+    - whale-history.mjs
+source_files: []
+depends_on: []
+related_to: []

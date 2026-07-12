@@ -6,6 +6,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { buildSmartTrendDecision, serializeSmartTrendDecision } from '../smart-trend-decision.mjs';
 import { formatHints8amScore } from '../smart-trend-labels.mjs';
+import { computeMarketOutlook } from '../smart-trend-monitor.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, '..', 'data');
@@ -21,15 +22,19 @@ function badgeFromScore(score, direction) {
 
 function stateToRow(sym, s, change = null) {
   const ratio = s.ratio ?? 0;
+  const prevRatio = s.prevRatio ?? null;
   const ratio8am = s.ratio8am ?? null;
+  const ratioDeltaPct = prevRatio != null && prevRatio > 0
+    ? ((ratio - prevRatio) / prevRatio) * 100
+    : null;
   return {
     symbol: sym,
     label: sym.replace(/USDT$/, ''),
     badge: badgeFromScore(s.score ?? 0, s.direction ?? 'short'),
     direction: s.direction ?? 'short',
     ratio,
-    prevRatio: null,
-    ratioDeltaPct: null,
+    prevRatio,
+    ratioDeltaPct,
     ratio8am,
     ratio8amDeltaPct: ratio8am && ratio8am > 0 ? ((ratio - ratio8am) / ratio8am) * 100 : null,
     change24h: change,
@@ -40,6 +45,7 @@ function stateToRow(sym, s, change = null) {
     prevFundingRate: null,
     fundingDeltaPct: null,
     hints8amLabel: formatHints8amScore(s.longHints8am, s.shortHints8am),
+    hints8amScore: (s.longHints8am || 0) - (s.shortHints8am || 0),
     marketCapLabel: null,
     pinned: false,
     volumeRank: null,
@@ -113,6 +119,7 @@ async function main() {
 
   const allRows = [...gainerRows, ...loserRows, ...pinnedRows, ...rightSideRows, ...volumeRows];
   const highlightPct = 10;
+  const outlook = computeMarketOutlook(allRows);
   const totalBig = allRows.filter(r => r.ratioDeltaPct != null && Math.abs(r.ratioDeltaPct) >= highlightPct).length;
   const decisionPush = buildSmartTrendDecision({
     boards,
@@ -146,6 +153,7 @@ async function main() {
       failed: 0,
       symbolCount: watchlist.symbols?.length ?? Object.keys(state).length,
     },
+    outlook,
   };
 
   await mkdir(DATA_DIR, { recursive: true });

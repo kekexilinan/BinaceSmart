@@ -78,6 +78,14 @@ function sceneTag(scene) {
   return '【观望】';
 }
 
+function sceneIcon(scene) {
+  if (scene === '顺势') return '📈';
+  if (scene === '反转') return '🔄';
+  return '⏸';
+}
+
+const DECISION_SCENE_LEGEND = '_场景图标：📈 顺势 · 🔄 反转 · ⏸ 观望_';
+
 function resolveActionGuide(item) {
   const playbook = ACTION_PLAYBOOK[item.tradeView] || ACTION_PLAYBOOK.neutral_watch;
 
@@ -85,6 +93,7 @@ function resolveActionGuide(item) {
     return {
       scene: playbook.scene,
       sceneTag: sceneTag(playbook.scene),
+      sceneIcon: sceneIcon(playbook.scene),
       action: '勿反手，等连续2h确认',
       avoid: playbook.avoid,
       urgency: 'low',
@@ -92,9 +101,7 @@ function resolveActionGuide(item) {
   }
 
   let action = playbook.action;
-  if (item.status === 'new') {
-    action = `先观察1h，${action}`;
-  } else if (item.status === 'strengthened') {
+  if (item.status === 'strengthened') {
     action = `信号加强，${action}`;
   } else if (item.status === 'continued' && item.streak >= 3) {
     action = `信号延续，可执行：${action}`;
@@ -108,6 +115,7 @@ function resolveActionGuide(item) {
   return {
     scene: playbook.scene,
     sceneTag: sceneTag(playbook.scene),
+    sceneIcon: sceneIcon(playbook.scene),
     action,
     avoid: playbook.avoid,
     urgency: playbook.urgency,
@@ -636,8 +644,7 @@ function decisionRows(items, highlightPct = 10) {
     const guide = resolveActionGuide(i);
     return {
       coin: `**${i.label}**`,
-      scene: guide.sceneTag,
-      action: guide.action,
+      action: `${guide.sceneIcon} ${guide.action}`,
       state: i.statusLabel,
       evidence: buildKeyEvidence(i, highlightPct),
     };
@@ -659,9 +666,8 @@ function decisionTable(title, items, highlightPct = 10) {
       freeze_first_column: true,
       columns: [
         { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
-        { name: 'scene', display_name: '场景', data_type: 'text', width: 'auto' },
-        { name: 'action', display_name: '建议操作', data_type: 'text', width: 'auto' },
-        { name: 'state', display_name: '连续性', data_type: 'text', width: 'auto' },
+        { name: 'action', display_name: '建议操作', data_type: 'text', width: '200px' },
+        { name: 'state', display_name: '连续性', data_type: 'text', width: '88px' },
         { name: 'evidence', display_name: '关键依据', data_type: 'text', width: 'auto' },
       ],
       rows,
@@ -676,7 +682,7 @@ function changeDataTable(title, items, highlightPct = 10) {
   return [
     {
       tag: 'markdown',
-      content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
+      content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 8am推=当日1h净多空比±5%累计计分 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
     },
     {
       tag: 'table',
@@ -721,6 +727,7 @@ export function buildSmartTrendDecisionElements(decision, { highlightPct = 10 } 
   const watchDisplay = filterWatchForDisplay(decision.watch);
   const bullets = buildHourlyActionBullets(decision.action, summary);
   const dataItems = [...decision.action, ...watchDisplay];
+  const showDecisionLegend = decision.action.length > 0 || watchDisplay.length > 0;
 
   const lines = [
     `**⏰ ${now}** · 聪明钱操作清单`,
@@ -733,6 +740,7 @@ export function buildSmartTrendDecisionElements(decision, { highlightPct = 10 } 
 
   return [
     { tag: 'markdown', content: lines.join('\n') },
+    ...(showDecisionLegend ? [{ tag: 'markdown', content: DECISION_SCENE_LEGEND }] : []),
     ...decisionTable('立刻关注', decision.action, highlightPct),
     ...decisionTable('继续观察', watchDisplay, highlightPct),
     ...changeDataTable('变化数据', dataItems, highlightPct),

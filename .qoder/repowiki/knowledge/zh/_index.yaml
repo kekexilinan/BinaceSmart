@@ -1,0 +1,92 @@
+# 知识卡导出索引文件
+schema_version: 1
+locale: zh-CN
+branch: feat/smart-trend-dynamic-watch
+nodes_managed: true
+exported_at: "2026-07-12T04:15:09Z"
+modules:
+    "":
+        dir_name: 币安合约聪明钱监控工具集
+        title: 币安合约聪明钱监控工具集
+        scope:
+            - README.md
+            - .gitignore
+            - package.json
+            - pnpm-lock.yaml
+            - ecosystem.config.cjs
+            - .env.example
+            - .nvmrc
+            - market-cap-filter.mjs
+            - pump-smart-alert.mjs
+            - smart-money.mjs
+            - strategy-review.mjs
+            - tradfi-symbol-filter.mjs
+            - whale-history.mjs
+        source_files: []
+        children:
+            - http_server
+            - position_health
+            - scripts
+            - signal_scanners
+            - smart_trend
+        depends_on: []
+        related_to: []
+    http_server:
+        dir_name: 聪明钱监控面板 HTTP 服务与前端
+        title: 聪明钱监控面板 HTTP 服务与前端
+        scope:
+            - server.mjs
+            - index.html
+            - proxy-setup.mjs
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    position_health:
+        dir_name: 持仓健康评分与监控推送
+        title: 持仓健康评分与监控推送
+        scope:
+            - position-health.mjs
+            - position-health-monitor.mjs
+            - user-positions.mjs
+            - data/user-positions.json
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    scripts:
+        dir_name: 运维与开发辅助脚本集
+        title: 运维与开发辅助脚本集
+        scope:
+            - scripts/
+            - dev-restart.mjs
+            - start-dev.bat
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    signal_scanners:
+        dir_name: 多因子信号扫描器（Smart Money_右侧_暴跌_做空_动量）
+        title: 多因子信号扫描器（Smart Money/右侧/暴跌/做空/动量）
+        scope:
+            - scan-smart-signal.mjs
+            - scan-stable.mjs
+            - scan-dump-risk.mjs
+            - scan-short-signal.mjs
+            - scan-momentum.mjs
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []
+    smart_trend:
+        dir_name: 聪明钱趋势监控与操作清单
+        title: 聪明钱趋势监控与操作清单
+        scope:
+            - smart-trend-monitor.mjs
+            - smart-trend-decision.mjs
+            - smart-trend-labels.mjs
+            - smart-trend-watchlist.mjs
+        source_files: []
+        children: []
+        depends_on: []
+        related_to: []

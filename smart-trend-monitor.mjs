@@ -21,6 +21,8 @@ import {
   ratioDeltaDisplay,
   DIGEST_TABLE_COLUMNS,
   buildDigestTableRows,
+  RANKING_TABLE_COLUMNS,
+  buildRankingTableRows,
 } from './smart-trend-labels.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -32,6 +34,8 @@ const MOCK_PUSH_FILE = join(DATA_DIR, 'smart-trend-push-mock.json');
 let deps = null;
 let running = false;
 let digestTimer = null;
+/** 已推送的整点 slot（ms），防止同一整点重复推送 */
+let lastDigestPushSlotMs = 0;
 /** @type {Map<string, object>} */
 const lastState = new Map();
 /** @type {{ last8amCaptureDateKey?: string }} */
@@ -56,11 +60,10 @@ export function getNextHourShanghai(now = new Date()) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
   const hour = parseInt(p.hour, 10);
-  const minute = parseInt(p.minute, 10);
 
-  if (minute === 0) {
-    return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`);
-  }
+  const currentSlot = new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`);
+  if (currentSlot.getTime() > now.getTime() + 500) return currentSlot;
+
   const nextHour = hour + 1;
   if (nextHour < 24) {
     return new Date(`${dateKey}T${String(nextHour).padStart(2, '0')}:00:00+08:00`);
@@ -68,6 +71,13 @@ export function getNextHourShanghai(now = new Date()) {
   const nextDay = new Date(`${dateKey}T00:00:00+08:00`);
   nextDay.setDate(nextDay.getDate() + 1);
   return nextDay;
+}
+
+export function getCurrentHourSlotShanghai(now = new Date()) {
+  const p = getShanghaiParts(now);
+  const dateKey = `${p.year}-${p.month}-${p.day}`;
+  const hour = parseInt(p.hour, 10);
+  return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`).getTime();
 }
 
 function sortByRatioChange(rows, tieBreakFn) {
@@ -268,11 +278,18 @@ async function attachRatio8amDeltas(rows) {
   return rows;
 }
 
-function hintSideFromDelta(pct) {
-  if (pct == null || Number.isNaN(pct)) return null;
-  if (pct >= RATIO_WARN_PCT) return 'long';
-  if (pct <= -RATIO_WARN_PCT) return 'short';
-  return null;
+/** 分档计分阈值：≥35% → 3分，≥15% → 2分，≥5% → 1分 */
+const HINTS_TIERS = [
+  { min: 35, score: 3 },
+  { min: 15, score: 2 },
+  { min: 5,  score: 1 },
+];
+
+function hintTierScore(absPct) {
+  for (const { min, score } of HINTS_TIERS) {
+    if (absPct >= min) return score;
+  }
+  return 0;
 }
 
 function recordHints8amCounts(rows) {
@@ -281,15 +298,23 @@ function recordHints8amCounts(rows) {
     const prev = lastState.get(row.symbol) || {};
     let longC = prev.hintCountDateKey === dateKey ? (prev.longHints8am || 0) : 0;
     let shortC = prev.hintCountDateKey === dateKey ? (prev.shortHints8am || 0) : 0;
-    const side = hintSideFromDelta(row.ratio8amDeltaPct);
-    if (side === 'long') longC += 1;
-    if (side === 'short') shortC += 1;
+    const pct = row.ratioDeltaPct;
+    if (pct != null && !Number.isNaN(pct)) {
+      const tier = hintTierScore(Math.abs(pct));
+      if (tier > 0) {
+        if (pct > 0) longC += tier;
+        else shortC += tier;
+      }
+    }
     row.hints8amLabel = formatHints8amScore(longC, shortC);
+    row.hints8amScore = longC - shortC;
     lastState.set(row.symbol, {
       ...lastState.get(row.symbol),
       longHints8am: longC,
       shortHints8am: shortC,
+      hints8amScore: longC - shortC,
       hintCountDateKey: dateKey,
+      hints8amUpdatedAt: Date.now(),
     });
   }
   queueSaveState();
@@ -310,6 +335,7 @@ export async function captureDaily8amRatioBaseline(symbols) {
         ratio8amSource: '8am',
         longHints8am: 0,
         shortHints8am: 0,
+        hints8amScore: 0,
         hintCountDateKey: dateKey,
       });
       updated += 1;
@@ -336,6 +362,7 @@ async function scanSymbolForDigest(symbol) {
     ...(prev || {}),
     score: analysis.score,
     direction: analysis.direction,
+    prevRatio: prev?.initialized ? prev.ratio : null,
     ratio: analysis.ratio,
     initialized: true,
   });
@@ -412,13 +439,81 @@ function fmtPriceChangePct(v) {
 const DIGEST_TABLE_MAX_ROWS = 15;
 const RANKING_TABLE_MAX_ROWS = 50;
 const RANKING_TABLE_PAGE_SIZE = 20; // 50 行约 3 页
+/** 榜单汇总最低 24h 成交额（USDT），0 表示不过滤 */
+export const DEFAULT_MIN_RANKING_VOLUME_24H = 10_000_000;
+/** 榜单汇总最高市值（USDT），超过此值不收录 */
+export const MAX_RANKING_MARKET_CAP = 8_000_000_000;
+
+function rowVolume24h(row) {
+  const v = row?.volume24h ?? row?.volumeRank;
+  return typeof v === 'number' && Number.isFinite(v) ? v : null;
+}
+
+function rowMarketCap(row) {
+  if (row?.marketCap != null && Number.isFinite(row.marketCap)) return row.marketCap;
+  return null;
+}
+
+function fmtVolumeThreshold(usd) {
+  if (usd >= 1e8) return `${(usd / 1e8).toFixed(usd % 1e8 === 0 ? 0 : 1)}亿$`;
+  if (usd >= 1e4) return `${Math.round(usd / 1e4)}万$`;
+  return `${usd}$`;
+}
+
+function buildVolumeLookup(enriched, boards) {
+  const map = new Map();
+  for (const row of enriched || []) {
+    const vol = rowVolume24h(row);
+    if (vol != null) map.set(row.symbol.toUpperCase(), vol);
+  }
+  for (const board of boards || []) {
+    for (const row of board.rows || []) {
+      const vol = rowVolume24h(row);
+      if (vol != null) map.set(row.symbol.toUpperCase(), vol);
+    }
+  }
+  return map;
+}
+
+function buildMcLookup(enriched, boards) {
+  const map = new Map();
+  for (const row of enriched || []) {
+    const mc = rowMarketCap(row);
+    if (mc != null) map.set(row.symbol.toUpperCase(), mc);
+  }
+  for (const board of boards || []) {
+    for (const row of board.rows || []) {
+      const mc = rowMarketCap(row);
+      if (mc != null) map.set(row.symbol.toUpperCase(), mc);
+    }
+  }
+  return map;
+}
+
+function meetsRankingVolume(row, volumeLookup, minVolume) {
+  if (!minVolume || minVolume <= 0) return true;
+  const vol = rowVolume24h(row) ?? volumeLookup.get(row.symbol?.toUpperCase());
+  return vol != null && vol >= minVolume;
+}
+
+function meetsRankingMc(row, mcLookup, maxMc) {
+  if (!maxMc || maxMc <= 0) return true;
+  const mc = rowMarketCap(row) ?? mcLookup.get(row.symbol?.toUpperCase());
+  return mc == null || mc <= maxMc;
+}
 
 function dedupeRowsBySymbol(rows) {
   const map = new Map();
   for (const row of rows) {
     const sym = row.symbol?.toUpperCase();
     if (!sym) continue;
-    if (!map.has(sym)) map.set(sym, row);
+    const existing = map.get(sym);
+    if (!existing) {
+      map.set(sym, row);
+    } else if (Array.isArray(row.sources)) {
+      if (!Array.isArray(existing.sources)) existing.sources = [];
+      for (const s of row.sources) if (!existing.sources.includes(s)) existing.sources.push(s);
+    }
   }
   return [...map.values()];
 }
@@ -429,6 +524,8 @@ function buildDigestTableSection(rows, highlightPct, {
   pageSize,
   maxRows,
   showPinIcon = true,
+  columns = DIGEST_TABLE_COLUMNS,
+  buildRows = buildDigestTableRows,
 } = {}) {
   const displayRows = rows.slice(0, maxRows ?? rows.length);
   if (!displayRows.length) return [];
@@ -439,19 +536,19 @@ function buildDigestTableSection(rows, highlightPct, {
     elements.push({ tag: 'markdown', content: header });
   }
 
-  const tableRows = buildDigestTableRows(displayRows, highlightPct, { showPinIcon });
+  const tableRows = buildRows(displayRows, highlightPct, { showPinIcon });
   elements.push({
     tag: 'table',
     page_size: pageSize ?? tableRows.length,
     row_height: 'low',
     freeze_first_column: true,
-    columns: DIGEST_TABLE_COLUMNS,
+    columns,
     rows: tableRows,
   });
   return elements;
 }
 
-function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
+export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
   let shiftLong1h = 0;
   let shiftShort1h = 0;
   let nLong1h = 0;
@@ -601,6 +698,8 @@ function buildBoardSectionElements(rows, {
   merged = false,
   dateKey = '',
   showPinIcon = true,
+  columns = DIGEST_TABLE_COLUMNS,
+  buildRows = buildDigestTableRows,
 } = {}) {
   const displayRows = rows.slice(0, DIGEST_TABLE_MAX_ROWS);
   const bigMoves = displayRows
@@ -619,7 +718,7 @@ function buildBoardSectionElements(rows, {
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     elements.push({
       tag: 'markdown',
-      content: `**⏰ ${now}**\n**${boardLabel}** · ${displayRows.length} 个${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
+      content: `**⏰ ${now}**\n**${boardLabel}** · ${displayRows.length} 个${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 8am推=当日1h净多空比分档累计(≥5%→1分,≥15%→2分,≥35%→3分) · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
     });
   }
 
@@ -633,13 +732,13 @@ function buildBoardSectionElements(rows, {
     });
   }
 
-  const tableRows = buildDigestTableRows(displayRows, highlightPct, { showPinIcon });
+  const tableRows = buildRows(displayRows, highlightPct, { showPinIcon });
   elements.push({
     tag: 'table',
     page_size: tableRows.length,
     row_height: 'low',
     freeze_first_column: true,
-    columns: DIGEST_TABLE_COLUMNS,
+    columns,
     rows: tableRows,
   });
 
@@ -653,6 +752,7 @@ export function buildMergedSmartTrendElements({
   intervalMin,
   highlightPct,
   dateKey,
+  minRankingVolume24h = DEFAULT_MIN_RANKING_VOLUME_24H,
 } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const pinnedBoard = boards.find(b => b.key === 'pinned');
@@ -660,17 +760,33 @@ export function buildMergedSmartTrendElements({
   const pinnedRows = pinnedBoard?.rows ?? [];
   const pinnedSet = new Set(pinnedRows.map(r => r.symbol.toUpperCase()));
 
-  const mergedRanking = dedupeRowsBySymbol(
-    rankingBoards.flatMap(b => b.rows).filter(r => !pinnedSet.has(r.symbol.toUpperCase())),
+  const volumeLookup = buildVolumeLookup(enriched, rankingBoards);
+  const mcLookup = buildMcLookup(enriched, rankingBoards);
+  const mergedAll = dedupeRowsBySymbol(
+    rankingBoards.flatMap(b => (b.rows || []).map(r => ({
+      ...r,
+      sources: Array.isArray(r.sources) && r.sources.length ? r.sources : [b.key],
+    })))
+      .filter(r => !pinnedSet.has(r.symbol.toUpperCase())),
   );
-  const rankingRows = [...mergedRanking].sort((a, b) => (b.ratio ?? 0) - (a.ratio ?? 0));
+  const mergedRanking = mergedAll.filter(r =>
+    meetsRankingVolume(r, volumeLookup, minRankingVolume24h)
+    && meetsRankingMc(r, mcLookup, MAX_RANKING_MARKET_CAP)
+  );
+  const rankingRows = [...mergedRanking].sort((a, b) => {
+      const sa = Math.abs(a.hints8amScore ?? 0);
+      const sb = Math.abs(b.hints8amScore ?? 0);
+      if (sb !== sa) return sb - sa;
+      return (b.ratio ?? 0) - (a.ratio ?? 0);
+    });
   const rankingDisplay = rankingRows.slice(0, RANKING_TABLE_MAX_ROWS);
   const rankingPageSize = RANKING_TABLE_PAGE_SIZE;
   const pinLabels = pinnedRows.map(r => r.label).join(', ');
+  const totalFiltered = mergedAll.length - mergedRanking.length;
 
   const elements = [{
     tag: 'markdown',
-    content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
+    content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 8am推=当日1h净多空比分档累计(≥5%→1分,≥15%→2分,≥35%→3分) · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
   }];
 
   if (pinnedRows.length) {
@@ -678,15 +794,23 @@ export function buildMergedSmartTrendElements({
       title: `**📌 固定监控** · ${pinnedRows.length} 个${pinLabels ? ` · ${pinLabels}` : ''}`,
       pageSize: pinnedRows.length,
       showPinIcon: false,
+      columns: RANKING_TABLE_COLUMNS,
+      buildRows: buildRankingTableRows,
     }));
   }
 
   if (rankingDisplay.length) {
+    const volumeRule = minRankingVolume24h > 0
+      ? ` · 24h成交额≥${fmtVolumeThreshold(minRankingVolume24h)}`
+      : '';
+    const mcRule = ` · 市值≤80亿$`;
     elements.push(...buildDigestTableSection(rankingDisplay, highlightPct, {
-      title: `**📊 榜单汇总** · 去重 ${mergedRanking.length} 个 · Top${rankingDisplay.length}`,
-      subtitle: `_涨幅/跌幅/右侧/交易额榜合并去重 · 按净多空比从高到低排序 · ${rankingPageSize} 行/页_`,
+      title: `**📊 榜单汇总** · 去重 ${mergedRanking.length} 个 · Top${rankingDisplay.length} · 已排除 ${totalFiltered} 个`,
+      subtitle: `_涨幅/跌幅/右侧/交易额榜合并去重${volumeRule}${mcRule} · 按8am推积分绝对值从高到低排序 · 同分按净多空比排序 · ${rankingPageSize} 行/页_`,
       pageSize: rankingPageSize,
       maxRows: RANKING_TABLE_MAX_ROWS,
+      columns: RANKING_TABLE_COLUMNS,
+      buildRows: buildRankingTableRows,
     }));
   }
 
@@ -720,9 +844,11 @@ function serializePushRow(r) {
     prevFundingRate: r.prevFundingRate ?? null,
     fundingDeltaPct: r.fundingDeltaPct ?? null,
     hints8amLabel: r.hints8amLabel ?? null,
+    hints8amScore: r.hints8amScore ?? null,
     marketCapLabel: r.marketCapLabel ?? null,
     pinned: r.pinned ?? false,
     volumeRank: r.volumeRank ?? null,
+    volume24h: r.volume24h ?? rowVolume24h(r),
   };
 }
 
@@ -733,6 +859,12 @@ async function savePushMock(snapshot) {
 
 export async function runSmartTrendPush({ force = false } = {}) {
   if (!deps?.enabled || !deps?.feishuEnabled || running) return;
+
+  const slotMs = getCurrentHourSlotShanghai();
+  if (!force && slotMs === lastDigestPushSlotMs) {
+    console.log('  ⏭ 聪明钱整点推送跳过: 本小时已推送');
+    return;
+  }
 
   running = true;
   const intervalMin = deps.intervalMin ?? 60;
@@ -808,7 +940,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
         .map(({ symbol, volume }) => {
           const row = enrichedMap.get(symbol.toUpperCase());
           if (!row) return null;
-          return { ...row, volumeRank: volume };
+          return { ...row, volumeRank: volume, volume24h: volume };
         })
         .filter(Boolean),
       (a, b) => (b.volumeRank ?? 0) - (a.volumeRank ?? 0),
@@ -842,6 +974,23 @@ export async function runSmartTrendPush({ force = false } = {}) {
         rows: volumeRows,
         template: 'purple',
       });
+    }
+
+    // 收集每个币种在所有板块中的来源，回写到 row 上供标签列显示
+    const symbolSources = new Map();
+    for (const board of boards) {
+      for (const row of board.rows) {
+        const sym = row.symbol?.toUpperCase();
+        if (!sym) continue;
+        if (!symbolSources.has(sym)) symbolSources.set(sym, []);
+        if (!symbolSources.get(sym).includes(board.key)) symbolSources.get(sym).push(board.key);
+      }
+    }
+    for (const board of boards) {
+      board.rows = board.rows.map(r => ({
+        ...r,
+        sources: symbolSources.get(r.symbol?.toUpperCase()) || [],
+      }));
     }
 
     let sent = 0;
@@ -915,6 +1064,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
         intervalMin,
         highlightPct,
         dateKey: groups.dateKey,
+        minRankingVolume24h: deps.minRankingVolume24h ?? DEFAULT_MIN_RANKING_VOLUME_24H,
       });
       const verdictShort = outlook.verdict.replace(/^[^\s]+\s/, '');
       await deps.sendFeishuCard(`📊 聪明钱监控全览 · ${verdictShort}`, mergedElements, outlook.template);
@@ -932,6 +1082,8 @@ export async function runSmartTrendPush({ force = false } = {}) {
           dateKey: groups.dateKey,
           topN: groups.topN ?? 30,
           showPinIcon: board.key !== 'pinned',
+          columns: RANKING_TABLE_COLUMNS,
+          buildRows: buildRankingTableRows,
         });
         const title = (board.key === 'pinned' || board.key === 'rightSide' || board.key === 'volumeTop')
           ? (bigCount > 0 ? `${board.label} · ${bigCount}个聪明钱显著变化` : board.label)
@@ -953,6 +1105,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
     const boardPart = `涨幅 ${gainerRows.length} + 跌幅 ${loserRows.length}${pinPart}${rightSidePart}${volumePart}`;
     const cardPart = mergeCards ? '1 张合并卡片' : `${sent} 张卡片(含研判)`;
     console.log(`  ✓ 聪明钱榜单推送: ${boardPart} · ${cardPart} · 共 ${totalCoins} 个 · ${totalBig} 个≥${highlightPct}%显著变化${failed ? ` · ${failed} 扫描失败` : ''} · ${outlook.verdict}`);
+    lastDigestPushSlotMs = slotMs;
   } catch (e) {
     console.warn(`  ⚠ 聪明钱全池推送失败: ${e.message}`);
   } finally {

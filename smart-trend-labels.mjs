@@ -150,7 +150,7 @@ export function priceCellDisplay(row, highlightPct = 10) {
   return `${compact}${PRICE_CELL_DETAIL_SEP}${detail}`;
 }
 
-/** 8am 推送计分：多 +1、空 -1，显示总分 */
+/** 8am推累计计分：当日每轮按 1h 净多空比变化分档(≥5%→1分,≥15%→2分,≥35%→3分)，多空分别累计后显示净分 */
 export function formatHints8amScore(longC = 0, shortC = 0) {
   const longN = longC || 0;
   const shortN = shortC || 0;
@@ -161,6 +161,20 @@ export function formatHints8amScore(longC = 0, shortC = 0) {
   return '0';
 }
 
+function fmtVolume(v) {
+  if (v == null || Number.isNaN(v) || v <= 0) return '-';
+  if (v >= 1e8) return `${(v / 1e8).toFixed(1)}亿`;
+  if (v >= 1e4) return `${(v / 1e4).toFixed(0)}万`;
+  return v.toFixed(0);
+}
+
+function fmtMcVolume(mcLabel, volume24h) {
+  const vPart = fmtVolume(volume24h);
+  if (!mcLabel || mcLabel === '?') return vPart;
+  if (vPart === '-') return mcLabel;
+  return `${mcLabel} ${vPart}`;
+}
+
 export function currentRatioShort(ratio) {
   if (ratio == null || Number.isNaN(ratio)) return '-';
   return Number(ratio).toFixed(2);
@@ -169,11 +183,11 @@ export function currentRatioShort(ratio) {
 export function tradeHintLabel(pct, strongPct = 10, { ratio } = {}) {
   if (pct == null || Number.isNaN(pct)) return '-';
   if (pct >= strongPct) {
-    if (ratio != null && !Number.isNaN(ratio) && ratio <= 1) return '⚠️ 不宜追多';
+    if (ratio != null && !Number.isNaN(ratio) && ratio <= 0.75) return '⚠️ 不宜追多';
     return '📈 考虑做多';
   }
   if (pct >= RATIO_WARN_PCT) {
-    if (ratio != null && !Number.isNaN(ratio) && ratio <= 1) return '⚠️ 不宜追多';
+    if (ratio != null && !Number.isNaN(ratio) && ratio <= 0.75) return '⚠️ 不宜追多';
     return '📈 偏做多';
   }
   if (pct <= -strongPct) return '📉 考虑做空';
@@ -205,8 +219,7 @@ export const DIGEST_TABLE_COLUMNS = [
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
-  { name: 'hint', display_name: '参考', data_type: 'text', width: 'auto' },
-  { name: 'mc', display_name: '市值', data_type: 'text', width: '80px' },
+  { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
   { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
 ];
 
@@ -216,8 +229,45 @@ export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true } 
     ratio: ratioCellDisplay(r, highlightPct),
     price: priceCellDisplay(r, highlightPct),
     hints8am: r.hints8amLabel || '-',
-    hint: tradeHintLabel(r.ratio8amDeltaPct, highlightPct),
-    mc: r.marketCapLabel || '-',
+    mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
     funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+  }));
+}
+
+const BOARD_SOURCE_LABELS = {
+  pinned: '固定',
+  gainer: '涨幅',
+  loser: '跌幅',
+  rightSide: '右侧',
+  volumeTop: '成交额',
+};
+
+/** 将币种来源榜单 key 数组格式化为显示标签，如 "涨幅|成交额" */
+export function formatBoardSources(sources) {
+  if (!Array.isArray(sources) || !sources.length) return '-';
+  return [...new Set(sources)].map(s => BOARD_SOURCE_LABELS[s] || s).join('|');
+}
+
+/** 榜单汇总专用列定义：末尾增加「标签」列，标识收录来源 */
+export const RANKING_TABLE_COLUMNS = [
+  { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
+  { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
+  { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
+  { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
+  { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
+  { name: 'sources', display_name: '标签', data_type: 'text', width: '100px' },
+];
+
+/** 榜单汇总专用行构建：比 buildDigestTableRows 多输出 sources（标签）列 */
+export function buildRankingTableRows(rows, highlightPct, { showPinIcon = true } = {}) {
+  return rows.map(r => ({
+    coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
+    ratio: ratioCellDisplay(r, highlightPct),
+    price: priceCellDisplay(r, highlightPct),
+    hints8am: r.hints8amLabel || '-',
+    mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
+    funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+    sources: formatBoardSources(r.sources),
   }));
 }

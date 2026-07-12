@@ -96,8 +96,8 @@ export function analyzeSmartSignal(raw, price = null) {
   const longAvg = parseFloat(raw.longWhalesAvgEntryPrice) || 0;
   const shortAvg = parseFloat(raw.shortWhalesAvgEntryPrice) || 0;
 
-  const isLong = ratio > 1;
-  const isShort = ratio < 1;
+  const isLong = ratio > 0.75;
+  const isShort = ratio < 0.75;
   const direction = isLong ? 'long' : isShort ? 'short' : 'neutral';
   const badge = isLong ? 'B' : isShort ? 'S' : '─';
 

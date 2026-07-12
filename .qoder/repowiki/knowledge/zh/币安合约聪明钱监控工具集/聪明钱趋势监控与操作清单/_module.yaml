@@ -1,0 +1,11 @@
+schema_version: 1
+module_path: smart_trend
+title: 聪明钱趋势监控与操作清单
+scope:
+    - smart-trend-monitor.mjs
+    - smart-trend-decision.mjs
+    - smart-trend-labels.mjs
+    - smart-trend-watchlist.mjs
+source_files: []
+depends_on: []
+related_to: []

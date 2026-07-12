@@ -314,10 +314,12 @@ async function batchEnrichSmartTrendDigest(rows) {
   ]);
   const change24hMap = {};
   const priceMap = {};
+  const volume24hMap = {};
   for (const t of (Array.isArray(tickers) ? tickers : [])) {
     if (!t?.symbol || !symbolSet.has(t.symbol)) continue;
     priceMap[t.symbol] = parseFloat(t.lastPrice);
     change24hMap[t.symbol] = parseFloat(t.priceChangePercent);
+    volume24hMap[t.symbol] = parseFloat(t.quoteVolume);
   }
 
   const fundingMap = {};
@@ -341,8 +343,10 @@ async function batchEnrichSmartTrendDigest(rows) {
       price8am: base && base > 0 ? base : null,
       change8am,
       change24h: change24hMap[r.symbol] ?? r.change24h ?? null,
+      volume24h: volume24hMap[r.symbol] ?? r.volume24h ?? r.volumeRank ?? null,
       fundingRate: fr,
       priceLabel: fmtPrice(price),
+      marketCap: mcMap[r.symbol],
       marketCapLabel: fmtMarketCap(mcMap[r.symbol]),
       fundingRateLabel: `${(fr * 100).toFixed(4)}%`,
     };
@@ -575,6 +579,7 @@ const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'fal
 const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
 const SMART_TREND_VOLUME_TOP_N = parseInt(process.env.SMART_TREND_VOLUME_TOP_N || '50', 10);
 const SMART_TREND_MERGE_CARDS = process.env.SMART_TREND_MERGE_CARDS !== 'false';
+const SMART_TREND_MIN_RANKING_VOLUME_24H = Math.max(0, parseInt(process.env.SMART_TREND_MIN_RANKING_VOLUME_24H || '10000000', 10) || 0);
 const SMART_TREND_WATCHLIST_REFRESH_MIN = parseInt(process.env.SMART_TREND_WATCHLIST_REFRESH_MIN || '60', 10);
 const SMART_TREND_WATCH_SYMBOLS = new Set(
   (process.env.SMART_TREND_WATCH_SYMBOLS || process.env.POSITION_HEALTH_WATCH_SYMBOLS || '')
@@ -2090,6 +2095,7 @@ server.listen(PORT, () => {
     ratioChangePct: SMART_TREND_RATIO_CHANGE_PCT,
     digestPageSize: SMART_TREND_DIGEST_PAGE_SIZE,
     mergeCards: SMART_TREND_MERGE_CARDS,
+    minRankingVolume24h: SMART_TREND_MIN_RANKING_VOLUME_24H,
     watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     getWatchlistGroups: SMART_TREND_DYNAMIC_WATCH ? getWatchlistGroups : undefined,
