@@ -104,7 +104,7 @@ function resolveActionGuide(item) {
   if (item.status === 'strengthened') {
     action = `信号加强，${action}`;
   } else if (item.status === 'continued' && item.streak >= 3) {
-    action = `信号延续，可执行：${action}`;
+    action = `${action}`;
   } else if (item.status === 'reversed') {
     action = `反转确认，${action}`;
   }
@@ -263,15 +263,23 @@ function mergeRowsBySymbol(boards) {
   };
 }
 
-function classifyView(row, sources) {
+function classifyView(row, sources, divergenceThreshold = 0.25) {
   const change = num(row.change24h) ?? num(row.change8am);
   const direction = row.direction || (num(row.ratio) != null && row.ratio >= 1 ? 'long' : 'short');
   const longBias = direction === 'long';
   const d1 = num(row.ratioDeltaPct);
   const d8 = num(row.ratio8amDeltaPct);
 
+  // 大户 vs 散户背离信号
+  const hasDivergence = row.divergence != null && !Number.isNaN(row.divergence) &&
+    row.divergence >= divergenceThreshold &&
+    row.whaleRatio != null && row.whaleRatio > 1.0 &&
+    row.globalRatio != null && row.globalRatio < 0.9;
+
   if (change != null && change >= 15 && longBias) return 'trend_long';
   if (change != null && change >= 15 && !longBias) return 'pump_risk';
+  // 有背离信号时，跌幅 -5% 即触发 rebound_watch（正常需 -10%）
+  if (change != null && change <= -5 && longBias && hasDivergence) return 'rebound_watch';
   if (change != null && change <= -10 && longBias) return 'rebound_watch';
   if (change != null && change <= -10 && !longBias) return 'downtrend_risk';
   if (longBias && (d1 >= 5 || d8 >= 5 || row.ratio >= 1.25 || hasSource(sources, 'rightSide'))) return 'accumulation';
@@ -279,7 +287,7 @@ function classifyView(row, sources) {
   return 'neutral_watch';
 }
 
-function calcScore(row, sources, highlightPct) {
+function calcScore(row, sources, highlightPct, divergenceThreshold = 0.25) {
   let score = 35;
   const change = Math.abs(num(row.change24h) ?? num(row.change8am) ?? 0);
   const ratio = num(row.ratio);
@@ -307,6 +315,14 @@ function calcScore(row, sources, highlightPct) {
   if (row.direction === 'short' && ratio != null && ratio <= 0.5) score += 10;
   if (Math.max(d1, d8) >= highlightPct) score += 12;
   else if (Math.max(d1, d8) >= 5) score += 6;
+
+  // 大户抄底/散户恐慌背离信号加分
+  if (row.divergence != null && !Number.isNaN(row.divergence) &&
+      row.divergence >= divergenceThreshold &&
+      row.whaleRatio != null && row.whaleRatio > 1.0 &&
+      row.globalRatio != null && row.globalRatio < 0.9) {
+    score += 12;
+  }
 
   if (sources.length === 1 && hasSource(sources, 'volumeTop') && change < 3) score -= 8;
   return Math.max(0, Math.min(100, Math.round(score)));
@@ -421,11 +437,11 @@ function makeStateEntry(item, continuity, now, group) {
   };
 }
 
-function buildItem(row, highlightPct, previousState, now) {
+function buildItem(row, highlightPct, previousState, now, divergenceThreshold = 0.25) {
   const sources = row.sources || [];
-  const tradeView = classifyView(row, sources);
+  const tradeView = classifyView(row, sources, divergenceThreshold);
   const meta = VIEW_META[tradeView] || VIEW_META.neutral_watch;
-  const score = calcScore(row, sources, highlightPct);
+  const score = calcScore(row, sources, highlightPct, divergenceThreshold);
   const item = {
     symbol: row.symbol,
     label: row.label || row.symbol.replace(/USDT$/, ''),
@@ -455,6 +471,9 @@ function buildItem(row, highlightPct, previousState, now) {
     fundingDeltaPct: num(row.fundingDeltaPct),
     pinned: row.pinned ?? hasSource(sources, 'pinned'),
     volume: num(row.volumeRank),
+    divergence: num(row.divergence),
+    whaleRatio: num(row.whaleRatio),
+    globalRatio: num(row.globalRatio),
     reasons: buildReasons(row, sources, tradeView),
   };
 
@@ -538,6 +557,9 @@ function serializeItem(item) {
     ratio8amDeltaPct: item.ratio8amDeltaPct,
     fundingRate: item.fundingRate,
     volume: item.volume,
+    divergence: item.divergence,
+    whaleRatio: item.whaleRatio,
+    globalRatio: item.globalRatio,
     reasons: item.reasons,
   };
 }
@@ -549,6 +571,7 @@ export function serializeSmartTrendDecision(decision) {
     action: decision.action.map(serializeItem),
     watch: decision.watch.map(serializeItem),
     invalidated: decision.invalidated,
+    reboundHighlights: decision.reboundHighlights,
     stats: decision.stats,
   };
 }
@@ -560,13 +583,15 @@ export function buildSmartTrendDecision({
   previousState = {},
   now = Date.now(),
   limits = {},
+  divergenceThreshold = 0.25,
+  reboundHighlightPct = 15,
 } = {}) {
   const merged = mergeRowsBySymbol(boards);
   const nextState = {};
   const items = [];
 
   for (const row of merged.rows) {
-    const { item, continuity } = buildItem(row, highlightPct, previousState, now);
+    const { item, continuity } = buildItem(row, highlightPct, previousState, now, divergenceThreshold);
     item._stateEntry = makeStateEntry(item, continuity, now, item.group);
     items.push(item);
   }
@@ -620,6 +645,21 @@ export function buildSmartTrendDecision({
     }
   }
 
+  // 收集急跌反弹观察高亮数据
+  const reboundHighlights = sorted
+    .filter(i => i.tradeView === 'rebound_watch' && Math.abs(num(i.change24h) ?? 0) >= reboundHighlightPct)
+    .slice(0, 5)
+    .map(i => ({
+      label: i.label,
+      symbol: i.symbol,
+      price: i.price,
+      change24h: i.change24h,
+      ratio: i.ratio,
+      divergence: i.divergence,
+      whaleRatio: i.whaleRatio,
+      globalRatio: i.globalRatio,
+    }));
+
   const stats = {
     rawRows: merged.rawRows,
     uniqueRows: merged.uniqueRows,
@@ -634,6 +674,7 @@ export function buildSmartTrendDecision({
     watch,
     invalidated: invalidatedTop,
     all: sorted,
+    reboundHighlights,
     stats,
     nextState,
   };

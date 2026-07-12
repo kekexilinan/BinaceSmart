@@ -8,4 +8,6 @@ scope:
     - data/user-positions.json
 source_files: []
 depends_on: []
-related_to: []
+related_to:
+    - path: http_server
+    - path: signal_scanners

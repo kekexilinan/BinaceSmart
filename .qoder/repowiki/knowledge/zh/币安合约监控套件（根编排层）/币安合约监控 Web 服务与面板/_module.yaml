@@ -1,10 +1,12 @@
 schema_version: 1
 module_path: http_server
-title: 聪明钱监控面板 HTTP 服务与前端
+title: 币安合约监控 Web 服务与面板
 scope:
     - server.mjs
     - index.html
     - proxy-setup.mjs
 source_files: []
 depends_on: []
-related_to: []
+related_to:
+    - path: position_health
+    - path: smart_trend

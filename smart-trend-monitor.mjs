@@ -23,7 +23,9 @@ import {
   buildDigestTableRows,
   RANKING_TABLE_COLUMNS,
   buildRankingTableRows,
+  buildReboundHighlightElements,
 } from './smart-trend-labels.mjs';
+import { fetchJson } from './proxy-setup.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
@@ -349,10 +351,27 @@ export async function captureDaily8amRatioBaseline(symbols) {
 async function scanSymbolForDigest(symbol) {
   const sym = symbol.toUpperCase();
   registerActiveSymbol(sym);
-  const raw = await fetchSmartSignal(sym);
+
+  const [raw, topPosArr, globalRatioArr] = await Promise.all([
+    fetchSmartSignal(sym),
+    fetchJson(`https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${sym}&period=1h&limit=1`).catch(() => null),
+    fetchJson(`https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${sym}&period=1h&limit=1`).catch(() => null),
+  ]);
+
   const price = parseFloat(raw?.lastPrice) || 0;
   const analysis = analyzeSmartSignal(raw, price);
   const prev = lastState.get(sym);
+
+  // 计算大户 vs 散户背离度
+  const topPos = Array.isArray(topPosArr) && topPosArr.length > 0 ? topPosArr[topPosArr.length - 1] : null;
+  const globalRatio = Array.isArray(globalRatioArr) && globalRatioArr.length > 0 ? globalRatioArr[globalRatioArr.length - 1] : null;
+  const whaleRatio = topPos ? parseFloat(topPos.longShortRatio) : null;
+  const globalRatioVal = globalRatio ? parseFloat(globalRatio.longShortRatio) : null;
+  let divergence = null;
+  if (whaleRatio != null && globalRatioVal != null &&
+      !Number.isNaN(whaleRatio) && !Number.isNaN(globalRatioVal)) {
+    divergence = whaleRatio - globalRatioVal;
+  }
 
   const ratioDeltaPct = prev?.initialized && prev.ratio > 0
     ? ((analysis.ratio - prev.ratio) / prev.ratio) * 100
@@ -364,6 +383,9 @@ async function scanSymbolForDigest(symbol) {
     direction: analysis.direction,
     prevRatio: prev?.initialized ? prev.ratio : null,
     ratio: analysis.ratio,
+    whaleRatio,
+    globalRatio: globalRatioVal,
+    divergence,
     initialized: true,
   });
   queueSaveState();
@@ -377,6 +399,9 @@ async function scanSymbolForDigest(symbol) {
     prevRatio: prev?.initialized ? prev.ratio : null,
     ratioDeltaPct,
     price,
+    whaleRatio,
+    globalRatio: globalRatioVal,
+    divergence,
   };
 }
 
@@ -548,7 +573,7 @@ function buildDigestTableSection(rows, highlightPct, {
   return elements;
 }
 
-export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
+export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT, divergenceThreshold = 0.25) {
   let shiftLong1h = 0;
   let shiftShort1h = 0;
   let nLong1h = 0;
@@ -560,6 +585,11 @@ export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
   let curLong = 0;
   let curShort = 0;
   let curNeutral = 0;
+  let divergenceCount = 0;
+  let maxDivergence = 0;
+  let maxDivergenceSymbol = '';
+  let maxDivergenceWhaleRatio = null;
+  let maxDivergenceGlobalRatio = null;
 
   for (const r of rows) {
     if (r.direction === 'long') curLong += 1;
@@ -585,6 +615,20 @@ export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
       } else if (d8 <= -warnPct) {
         shiftShort8am += Math.abs(d8);
         nShort8am += 1;
+      }
+    }
+
+    // 大户 vs 散户背离检测
+    if (r.divergence != null && !Number.isNaN(r.divergence) &&
+        r.divergence >= divergenceThreshold &&
+        r.whaleRatio != null && r.whaleRatio > 1.0 &&
+        r.globalRatio != null && r.globalRatio < 0.9) {
+      divergenceCount++;
+      if (r.divergence > maxDivergence) {
+        maxDivergence = r.divergence;
+        maxDivergenceSymbol = r.label;
+        maxDivergenceWhaleRatio = r.whaleRatio;
+        maxDivergenceGlobalRatio = r.globalRatio;
       }
     }
   }
@@ -640,6 +684,11 @@ export function computeMarketOutlook(rows, warnPct = RATIO_WARN_PCT) {
     shiftShort8am,
     topLong,
     topShort,
+    divergenceCount,
+    maxDivergence,
+    maxDivergenceSymbol,
+    maxDivergenceWhaleRatio,
+    maxDivergenceGlobalRatio,
   };
 }
 
@@ -685,6 +734,17 @@ function buildMarketOutlookElements(rows, outlook, { intervalMin = 60, highlight
     outlook.topShort.forEach((r, i) => {
       lines.push(`${i + 1}. ${formatTopMoveItem(r, highlightPct)}`);
     });
+  }
+
+  // 大户 vs 散户背离统计
+  if (outlook.divergenceCount > 0) {
+    lines.push('', '**📊 大户 vs 散户背离**');
+    lines.push(`1. 背离信号 **${outlook.divergenceCount}** 个 · 大户偏多+散户偏空`);
+    if (outlook.maxDivergenceSymbol) {
+      const whaleStr = outlook.maxDivergenceWhaleRatio != null ? outlook.maxDivergenceWhaleRatio.toFixed(2) : '?';
+      const globalStr = outlook.maxDivergenceGlobalRatio != null ? outlook.maxDivergenceGlobalRatio.toFixed(2) : '?';
+      lines.push(`2. 最显著: ${outlook.maxDivergenceSymbol} 大户${whaleStr} vs 散户${globalStr} (背离${outlook.maxDivergence.toFixed(2)})`);
+    }
   }
 
   return [{ tag: 'markdown', content: lines.join('\n') }];
@@ -753,6 +813,7 @@ export function buildMergedSmartTrendElements({
   highlightPct,
   dateKey,
   minRankingVolume24h = DEFAULT_MIN_RANKING_VOLUME_24H,
+  reboundHighlights = [],
 } = {}) {
   const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
   const pinnedBoard = boards.find(b => b.key === 'pinned');
@@ -788,6 +849,11 @@ export function buildMergedSmartTrendElements({
     tag: 'markdown',
     content: `**⏰ ${now}** · 聪明钱全池摘要 · 近 ${intervalMin}min${dateKey ? ` · ${dateKey}` : ''}\n_净多空比含 1h|8am 聪明钱变化 · 8am推=当日1h净多空比分档累计(≥5%→1分,≥15%→2分,≥35%→3分) · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
   }];
+
+  // ⚡ 急跌反弹观察高亮区块（放在固定监控之前）
+  if (reboundHighlights.length) {
+    elements.push(...buildReboundHighlightElements(reboundHighlights));
+  }
 
   if (pinnedRows.length) {
     elements.push(...buildDigestTableSection(pinnedRows, highlightPct, {
@@ -849,6 +915,9 @@ function serializePushRow(r) {
     pinned: r.pinned ?? false,
     volumeRank: r.volumeRank ?? null,
     volume24h: r.volume24h ?? rowVolume24h(r),
+    whaleRatio: r.whaleRatio ?? null,
+    globalRatio: r.globalRatio ?? null,
+    divergence: r.divergence ?? null,
   };
 }
 
@@ -995,12 +1064,14 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
     let sent = 0;
     const mergeCards = deps.mergeCards !== false;
-    const outlook = computeMarketOutlook(enriched);
+    const outlook = computeMarketOutlook(enriched, undefined, deps.divergenceThreshold ?? 0.25);
     const decisionPush = buildSmartTrendDecision({
       boards: boards.filter(b => b.rows.length),
       outlook,
       highlightPct,
       previousState: decisionState,
+      divergenceThreshold: deps.divergenceThreshold ?? 0.25,
+      reboundHighlightPct: deps.reboundHighlightPct ?? 15,
     });
     queueSaveDecisionState(decisionPush.nextState);
 
@@ -1065,6 +1136,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
         highlightPct,
         dateKey: groups.dateKey,
         minRankingVolume24h: deps.minRankingVolume24h ?? DEFAULT_MIN_RANKING_VOLUME_24H,
+        reboundHighlights: decisionPush.reboundHighlights || [],
       });
       const verdictShort = outlook.verdict.replace(/^[^\s]+\s/, '');
       await deps.sendFeishuCard(`📊 聪明钱监控全览 · ${verdictShort}`, mergedElements, outlook.template);

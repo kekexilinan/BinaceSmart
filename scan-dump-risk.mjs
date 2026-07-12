@@ -169,6 +169,9 @@ export async function checkDumpRisk(symbol) {
     }
   }
 
+  // 计算反弹潜力
+  const rebound = calcReboundPotential({ ticker, klines1h, topPos, globalRatio });
+
   const riskLevel =
     riskScore >= 6 ? 'high' :
     riskScore >= 3 ? 'warn' : 'low';
@@ -186,7 +189,11 @@ export async function checkDumpRisk(symbol) {
     riskLevel,
     riskEmoji,
     risks,
-    summary: `${riskEmoji} ${sym.replace('USDT', '')} 风险评分 ${riskScore} — ${risks.map(r => `${r.level}${r.tag}`).join(' ') || '未发现明显风险'}`,
+    reboundScore: rebound.score,
+    reboundLevel: rebound.level,
+    reboundLabel: rebound.label,
+    reboundFactors: rebound.factors,
+    summary: `${riskEmoji} ${sym.replace('USDT', '')} 风险评分 ${riskScore} — ${risks.map(r => `${r.level}${r.tag}`).join(' ') || '未发现明显风险'}${rebound.score > 0 ? ` · 反弹潜力 ${rebound.score}${rebound.label}` : ''}`,
   };
 }
 
@@ -240,6 +247,98 @@ export async function scanDumpCoins({
 
   results.sort((a, b) => b.riskScore - a.riskScore);
   return results;
+}
+
+/**
+ * 计算反弹潜力评分（0-100），用于暴跌推送中识别可观察反弹的币种。
+ * 评分越高，反弹潜力越大。
+ */
+export function calcReboundPotential({ ticker, klines1h, topPos, globalRatio } = {}) {
+  let score = 0;
+  const factors = [];
+
+  // ① RSI6 超卖/偏低（从1h K线计算）
+  let rsi6 = null;
+  if (Array.isArray(klines1h) && klines1h.length >= 8) {
+    const closes = klines1h.slice(-8).map(k => parseFloat(k[4]));
+    const gains = [];
+    const losses = [];
+    for (let i = 1; i < closes.length; i++) {
+      const diff = closes[i] - closes[i - 1];
+      gains.push(Math.max(0, diff));
+      losses.push(Math.max(0, -diff));
+    }
+    const period = gains.length;
+    const avgGain = gains.length > 0 ? gains.reduce((a, b) => a + b, 0) / period : 0;
+    const avgLoss = losses.length > 0 ? losses.reduce((a, b) => a + b, 0) / period : 0;
+    if (avgLoss === 0) rsi6 = 100;
+    else rsi6 = 100 - 100 / (1 + avgGain / avgLoss);
+
+    if (rsi6 < 20) { score += 25; factors.push({ tag: 'RSI超卖', detail: rsi6.toFixed(1), score: 25 }); }
+    else if (rsi6 < 30) { score += 15; factors.push({ tag: 'RSI偏低', detail: rsi6.toFixed(1), score: 15 }); }
+  }
+
+  // ② 24h 跌幅深度
+  const change24h = ticker ? parseFloat(ticker.priceChangePercent) : 0;
+  if (change24h <= -50) { score += 30; factors.push({ tag: '暴跌', detail: `${change24h.toFixed(1)}%`, score: 30 }); }
+  else if (change24h <= -30) { score += 20; factors.push({ tag: '大跌', detail: `${change24h.toFixed(1)}%`, score: 20 }); }
+
+  // ③ 大户偏多
+  const topPosLatest = Array.isArray(topPos) && topPos.length > 0 ? topPos[topPos.length - 1] : null;
+  const whaleRatio = topPosLatest ? parseFloat(topPosLatest.longShortRatio) : null;
+  if (whaleRatio != null && whaleRatio > 1.0) {
+    score += 15;
+    factors.push({ tag: '大户偏多', detail: whaleRatio.toFixed(2), score: 15 });
+  }
+
+  // ④ 散户偏空
+  const globalRatioLatest = Array.isArray(globalRatio) && globalRatio.length > 0 ? globalRatio[globalRatio.length - 1] : null;
+  const globalRatioVal = globalRatioLatest ? parseFloat(globalRatioLatest.longShortRatio) : null;
+  if (globalRatioVal != null && globalRatioVal < 0.8) {
+    score += 10;
+    factors.push({ tag: '散户偏空', detail: globalRatioVal.toFixed(2), score: 10 });
+  }
+
+  // ⑤ 大户散户背离
+  if (whaleRatio != null && globalRatioVal != null) {
+    const divergence = whaleRatio - globalRatioVal;
+    if (divergence >= 0.25) {
+      score += 15;
+      factors.push({ tag: '背离信号', detail: `+${divergence.toFixed(2)}`, score: 15 });
+    }
+  }
+
+  // ⑥ 缩量止跌：最近1h成交量 < 前3h均值50%
+  if (Array.isArray(klines1h) && klines1h.length >= 4) {
+    const last1hVol = parseFloat(klines1h[klines1h.length - 1][7]);
+    const prev3hVol = klines1h.slice(-4, -1).reduce((s, k) => s + parseFloat(k[7]), 0) / 3;
+    if (prev3hVol > 0 && last1hVol < prev3hVol * 0.5) {
+      score += 10;
+      factors.push({ tag: '缩量止跌', detail: `量比${(last1hVol / prev3hVol).toFixed(2)}`, score: 10 });
+    }
+  }
+
+  // ⑦ 下影线长：(收盘-最低)/(最高-最低) < 0.3
+  if (Array.isArray(klines1h) && klines1h.length >= 1) {
+    const last = klines1h[klines1h.length - 1];
+    const open = parseFloat(last[1]);
+    const high = parseFloat(last[2]);
+    const low = parseFloat(last[3]);
+    const close = parseFloat(last[4]);
+    const range = high - low;
+    if (range > 0) {
+      const lowerShadowRatio = (Math.min(open, close) - low) / range;
+      if (lowerShadowRatio < 0.3) {
+        score += 10;
+        factors.push({ tag: '下影线', detail: (lowerShadowRatio * 100).toFixed(0) + '%', score: 10 });
+      }
+    }
+  }
+
+  const level = score >= 60 ? 'high' : score >= 40 ? 'medium' : 'low';
+  const label = level === 'high' ? '🟢' : level === 'medium' ? '🟡' : '';
+
+  return { score, level, label, factors };
 }
 
 /**

@@ -588,6 +588,8 @@ const SMART_TREND_WATCH_SYMBOLS = new Set(
     .filter(Boolean)
     .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
 );
+const SMART_TREND_DIVERGENCE_THRESHOLD = parseFloat(process.env.SMART_TREND_DIVERGENCE_THRESHOLD || '0.25', 10);
+const REBOUND_HIGHLIGHT_CHANGE_PCT = parseFloat(process.env.REBOUND_HIGHLIGHT_CHANGE_PCT || '15', 10);
 
 let pumpSmartRunning = false;
 let dumpAlertRunning = false;
@@ -1250,10 +1252,11 @@ async function runDumpAlertPush() {
 
     const highRisk = dumpResults.filter(r => r.riskLevel === 'high');
     const warnRisk = dumpResults.filter(r => r.riskLevel === 'warn');
+    const reboundHighCount = dumpResults.filter(r => r.reboundLevel === 'high').length;
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     const elements = [
       { tag: 'markdown', content: `**⏰ ${now}**\n**暴跌预警** · 每 ${DUMP_PUSH_HOURS}h 整点 · 风险≥${DUMP_MIN_RISK}` },
-      { tag: 'markdown', content: `**🚨 ${highRisk.length} 高危 · ⚠️ ${warnRisk.length} 警告**` },
+      { tag: 'markdown', content: `**🚨 ${highRisk.length} 高危 · ⚠️ ${warnRisk.length} 警告${reboundHighCount > 0 ? ` · ⚡ ${reboundHighCount} 个高反弹潜力` : ''}**` },
       {
         tag: 'table',
         page_size: 10,
@@ -1264,7 +1267,8 @@ async function runDumpAlertPush() {
           { name: 'price', display_name: '币价', data_type: 'text', width: 'auto' },
           { name: 'chg8am', display_name: '8am', data_type: 'lark_md', width: 'auto' },
           { name: 'chg24h', display_name: '24h', data_type: 'lark_md', width: 'auto' },
-          { name: 'risk', display_name: '风险分', data_type: 'lark_md', width: 'auto' },
+          { name: 'risk', display_name: '风险', data_type: 'lark_md', width: 'auto' },
+          { name: 'rebound', display_name: '反弹', data_type: 'lark_md', width: 'auto' },
           { name: 'mc', display_name: '市值', data_type: 'text', width: 'auto' },
           { name: 'tags', display_name: '风险标签', data_type: 'text', width: 'auto' },
         ],
@@ -1272,12 +1276,14 @@ async function runDumpAlertPush() {
           const chg8amColor = r.changeSince8am >= 0 ? 'turquoise' : r.changeSince8am <= -10 ? 'red' : 'orange';
           const chg24hColor = r.change24h >= 0 ? 'turquoise' : r.change24h <= -10 ? 'red' : 'orange';
           const riskColor = r.riskLevel === 'high' ? 'red' : 'orange';
+          const reboundColor = r.reboundLevel === 'high' ? 'green' : r.reboundLevel === 'medium' ? 'orange' : 'grey';
           return {
             coin: r.label,
             price: `$${fmtPrice(r.price)}`,
             chg8am: `<font color='${chg8amColor}'>${r.changeSince8am >= 0 ? '+' : ''}${r.changeSince8am.toFixed(1)}%</font>`,
             chg24h: `<font color='${chg24hColor}'>${r.change24h >= 0 ? '+' : ''}${r.change24h.toFixed(1)}%</font>`,
             risk: `<font color='${riskColor}'>${r.riskScore}</font>`,
+            rebound: `<font color='${reboundColor}'>${r.reboundScore ?? '-'}${r.reboundLabel || ''}</font>`,
             mc: fmtMarketCap(marketCaps[r.symbol]),
             tags: r.risks.slice(0, 3).map(x => `${x.level}${x.tag}`).join(' '),
           };
@@ -1285,7 +1291,7 @@ async function runDumpAlertPush() {
       },
     ];
 
-    const title = `🚨 暴跌预警 · ${dumpResults.length} 个${pushCounts[dumpResults[0]?.symbol] > 1 ? ' (持续)' : ''}`;
+    const title = `🚨 暴跌预警 · ${dumpResults.length} 个${reboundHighCount > 0 ? ` · ⚡ ${reboundHighCount} 个高反弹潜力` : ''}${pushCounts[dumpResults[0]?.symbol] > 1 ? ' (持续)' : ''}`;
     await sendFeishuCardV2(title, elements, 'red');
     console.log(`  ✓ 暴跌实时推送 (${dumpResults.length} 个: ${dumpResults.map(r => r.label).join(', ')})`);
     savePredictionSnapshot({ dump: dumpResults, source: 'dump-realtime' }).catch(() => {});
@@ -2096,6 +2102,8 @@ server.listen(PORT, () => {
     digestPageSize: SMART_TREND_DIGEST_PAGE_SIZE,
     mergeCards: SMART_TREND_MERGE_CARDS,
     minRankingVolume24h: SMART_TREND_MIN_RANKING_VOLUME_24H,
+    divergenceThreshold: SMART_TREND_DIVERGENCE_THRESHOLD,
+    reboundHighlightPct: REBOUND_HIGHLIGHT_CHANGE_PCT,
     watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     getWatchlistGroups: SMART_TREND_DYNAMIC_WATCH ? getWatchlistGroups : undefined,

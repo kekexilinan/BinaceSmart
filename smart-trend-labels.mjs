@@ -196,6 +196,45 @@ export function tradeHintLabel(pct, strongPct = 10, { ratio } = {}) {
 }
 
 /** 变多/变少最显著列表单行：净多空比 + 1h 变化 + 参考 */
+export function formatDivergence(row) {
+  const d = row.divergence;
+  if (d == null || Number.isNaN(d)) return '-';
+  const label = d >= 0 ? `+${d.toFixed(2)}` : `${d.toFixed(2)}`;
+  if (d >= 0.25) return `<font color='red'>${label}</font>`;
+  return label;
+}
+
+/**
+ * 构建急跌反弹观察高亮区块元素
+ */
+export function buildReboundHighlightElements(items) {
+  if (!items || !items.length) return [];
+
+  const lines = [
+    `**⚡ 急跌反弹观察 · ${items.length} 个**`,
+    '',
+    ...items.map((item, i) => {
+      const priceStr = item.price != null && item.price > 0 ? fmtDigestPrice(item.price) : '';
+      const changeStr = item.change24h != null ? `${Math.abs(item.change24h).toFixed(1)}%` : '';
+      const ratioStr = item.ratio != null && item.ratio > 0 ? `聪明钱偏多(${item.ratio.toFixed(2)})` : '';
+      const divergenceStr = item.divergence != null && !Number.isNaN(item.divergence) && item.divergence >= 0.25
+        ? `大户抄底背离+${item.divergence.toFixed(2)}` : '';
+      const parts = [
+        `**${item.label}**`,
+        changeStr ? `跌${changeStr}` : '',
+        priceStr ? `→ 反弹中(\$${priceStr})` : '',
+        ratioStr,
+        divergenceStr,
+        '_先等价格确认_',
+      ].filter(Boolean);
+      return `${i + 1}. ${parts.join(' · ')}`;
+    }),
+    '',
+  ];
+
+  return [{ tag: 'markdown', content: lines.join('\n') }];
+}
+
 export function formatTopMoveItem(row, highlightPct = 10) {
   const ratioPart = currentRatioShort(row.ratio);
   const deltaPart = ratioDeltaDisplay(row.ratioDeltaPct, highlightPct);
@@ -216,7 +255,8 @@ export function fundingChangeLabel(prev, cur, deltaPct) {
 
 export const DIGEST_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
-  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
+  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
@@ -227,6 +267,7 @@ export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true } 
   return rows.map(r => ({
     coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
     ratio: ratioCellDisplay(r, highlightPct),
+    divergence: formatDivergence(r),
     price: priceCellDisplay(r, highlightPct),
     hints8am: r.hints8amLabel || '-',
     mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
@@ -251,7 +292,8 @@ export function formatBoardSources(sources) {
 /** 榜单汇总专用列定义：末尾增加「标签」列，标识收录来源 */
 export const RANKING_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
-  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '220px' },
+  { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
+  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
@@ -264,6 +306,7 @@ export function buildRankingTableRows(rows, highlightPct, { showPinIcon = true }
   return rows.map(r => ({
     coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
     ratio: ratioCellDisplay(r, highlightPct),
+    divergence: formatDivergence(r),
     price: priceCellDisplay(r, highlightPct),
     hints8am: r.hints8amLabel || '-',
     mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
