@@ -23,14 +23,14 @@ const ACTION_PLAYBOOK = {
   },
   rebound_watch: {
     scene: '反转',
-    action: '等价格止跌确认后再轻仓做多',
+    action: '等价格止跌确认后再考虑入场',
     avoid: '下跌途中抄底',
     waitFor: '跌幅收窄 + 聪明钱由空转多',
     urgency: 'medium',
   },
   accumulation: {
     scene: '顺势',
-    action: '观察吸筹，可分批建多',
+    action: '观察吸筹，等待突破确认',
     avoid: '单次重仓',
     waitFor: '突破 + 量变',
     urgency: 'medium',
@@ -237,6 +237,7 @@ function mergeRowsBySymbol(boards) {
         'marketCapLabel',
         'volumeRank',
         'pinned',
+        'hasSpot',
       ]) {
         if (merged[field] == null && row[field] != null) merged[field] = row[field];
       }
@@ -474,6 +475,7 @@ function buildItem(row, highlightPct, previousState, now, divergenceThreshold = 
     divergence: num(row.divergence),
     whaleRatio: num(row.whaleRatio),
     globalRatio: num(row.globalRatio),
+    hasSpot: row.hasSpot === true,
     reasons: buildReasons(row, sources, tradeView),
   };
 
@@ -560,6 +562,7 @@ function serializeItem(item) {
     divergence: item.divergence,
     whaleRatio: item.whaleRatio,
     globalRatio: item.globalRatio,
+    hasSpot: item.hasSpot,
     reasons: item.reasons,
   };
 }
@@ -585,6 +588,8 @@ export function buildSmartTrendDecision({
   limits = {},
   divergenceThreshold = 0.25,
   reboundHighlightPct = 15,
+  /** 已持仓币种符号集合（大写），trend_long 币种若在此集合中将被降级为观望 */
+  heldSymbols = new Set(),
 } = {}) {
   const merged = mergeRowsBySymbol(boards);
   const nextState = {};
@@ -592,6 +597,13 @@ export function buildSmartTrendDecision({
 
   for (const row of merged.rows) {
     const { item, continuity } = buildItem(row, highlightPct, previousState, now, divergenceThreshold);
+    // 已持仓币种不推荐做多：将 trend_long 降级为 neutral_watch
+    if (item.tradeView === 'trend_long' && heldSymbols.has(item.symbol.toUpperCase())) {
+      item.tradeView = 'neutral_watch';
+      item.tradeViewLabel = VIEW_META.neutral_watch.label;
+      item.side = VIEW_META.neutral_watch.side;
+      item.baseGroup = VIEW_META.neutral_watch.group;
+    }
     item._stateEntry = makeStateEntry(item, continuity, now, item.group);
     items.push(item);
   }
@@ -675,16 +687,20 @@ export function buildSmartTrendDecision({
     invalidated: invalidatedTop,
     all: sorted,
     reboundHighlights,
+    heldSymbols,
     stats,
     nextState,
   };
 }
 
-function decisionRows(items, highlightPct = 10) {
+function decisionRows(items, highlightPct = 10, heldSymbols = new Set()) {
   return items.map(i => {
     const guide = resolveActionGuide(i);
+    const isHeld = heldSymbols.has(i.symbol.toUpperCase());
+    const hasSpot = i.hasSpot === true;
+    const coinText = (isHeld || hasSpot) ? `**~~${i.label}~~**` : `**${i.label}**`;
     return {
-      coin: `**${i.label}**`,
+      coin: coinText,
       action: `${guide.sceneIcon} ${guide.action}`,
       state: i.statusLabel,
       evidence: buildKeyEvidence(i, highlightPct),
@@ -692,12 +708,12 @@ function decisionRows(items, highlightPct = 10) {
   });
 }
 
-function decisionTable(title, items, highlightPct = 10) {
+function decisionTable(title, items, highlightPct = 10, heldSymbols = new Set()) {
   if (!items.length) {
     return [{ tag: 'markdown', content: `**${title}**\n暂无` }];
   }
   const displayItems = items.slice(0, DECISION_TABLE_MAX_ROWS);
-  const rows = decisionRows(displayItems, highlightPct);
+  const rows = decisionRows(displayItems, highlightPct, heldSymbols);
   return [
     { tag: 'markdown', content: `**${title}**` },
     {
@@ -716,10 +732,10 @@ function decisionTable(title, items, highlightPct = 10) {
   ];
 }
 
-function changeDataTable(title, items, highlightPct = 10) {
+function changeDataTable(title, items, highlightPct = 10, heldSymbols = new Set()) {
   if (!items.length) return [];
   const displayItems = items.slice(0, DECISION_TABLE_MAX_ROWS);
-  const rows = buildDigestTableRows(displayItems, highlightPct);
+  const rows = buildDigestTableRows(displayItems, highlightPct, { heldSymbols });
   return [
     {
       tag: 'markdown',
@@ -759,7 +775,7 @@ function invalidatedElements(items) {
   ];
 }
 
-export function buildSmartTrendDecisionElements(decision, { highlightPct = 10 } = {}) {
+export function buildSmartTrendDecisionElements(decision, { highlightPct = 10, heldSymbols = new Set() } = {}) {
   const now = new Date(decision.capturedAt).toLocaleString('zh-CN', {
     timeZone: 'Asia/Shanghai',
     hour12: false,
@@ -782,9 +798,9 @@ export function buildSmartTrendDecisionElements(decision, { highlightPct = 10 } 
   return [
     { tag: 'markdown', content: lines.join('\n') },
     ...(showDecisionLegend ? [{ tag: 'markdown', content: DECISION_SCENE_LEGEND }] : []),
-    ...decisionTable('立刻关注', decision.action, highlightPct),
-    ...decisionTable('继续观察', watchDisplay, highlightPct),
-    ...changeDataTable('变化数据', dataItems, highlightPct),
+    ...decisionTable('立刻关注', decision.action, highlightPct, heldSymbols),
+    ...decisionTable('继续观察', watchDisplay, highlightPct, heldSymbols),
+    ...changeDataTable('变化数据', dataItems, highlightPct, heldSymbols),
     ...invalidatedElements(decision.invalidated),
     { tag: 'markdown', content: '_非自动下单；方向反转需连续2h确认，避免小时级来回反手。_' },
   ];

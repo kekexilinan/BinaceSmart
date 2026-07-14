@@ -1,4 +1,5 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 setupProxyFromEnv();
 
@@ -220,7 +221,7 @@ export async function scanDumpCoins({
   onProgress,
 } = {}) {
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
-  const candidates = tickers
+  const rawCandidates = tickers
     .filter(t => t.symbol.endsWith('USDT'))
     .map(t => ({
       symbol: t.symbol,
@@ -230,6 +231,8 @@ export async function scanDumpCoins({
     }))
     .sort((a, b) => a.change - b.change)
     .slice(0, limit);
+
+  const candidates = await filterSpotItems(rawCandidates);
 
   const results = [];
   let done = 0;

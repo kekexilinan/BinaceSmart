@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: signal_scanners
-title: Binance Futures 多维度扫描器集合
+title: Binance Futures 多策略扫描器集合
 scope:
     - scan-smart-signal.mjs
     - scan-stable.mjs
@@ -11,4 +11,4 @@ source_files: []
 depends_on: []
 related_to:
     - path: position_health
-    - path: smart_trend
+    - path: scripts/preview_rebound_features

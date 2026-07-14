@@ -4,6 +4,7 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
@@ -198,12 +199,16 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
   const losers = results[1];
   const volumeTop = volumeTopN > 0 && deps.getTopByVolume ? results[2] : { items: [] };
 
-  const next = new Set([
-    ...gainers.items.map(i => i.symbol.toUpperCase()),
-    ...losers.items.map(i => i.symbol.toUpperCase()),
-    ...volumeTop.items.map(i => i.symbol.toUpperCase()),
-  ]);
+  // 现货过滤：排除无币安现货交易对的合约
+  const spotGainers = await filterSpotItems(gainers.items);
+  const spotLosers = await filterSpotItems(losers.items);
+  const spotVolumeTop = await filterSpotItems(volumeTop.items);
 
+  const next = new Set([
+    ...spotGainers.map(i => i.symbol.toUpperCase()),
+    ...spotLosers.map(i => i.symbol.toUpperCase()),
+    ...spotVolumeTop.map(i => i.symbol.toUpperCase()),
+  ]);
   let rightSideItems = [];
   if (deps?.scanRightSide) {
     try {
@@ -228,10 +233,10 @@ export async function refreshSmartTrendWatchlist({ force = false } = {}) {
       return `${p.year}-${p.month}-${p.day}`;
     })()
     : (gainers.meta?.baselineDate || dateKey);
-  gainerList = gainers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
-  loserList = losers.items.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
+  gainerList = spotGainers.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
+  loserList = spotLosers.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
   rightSideList = rightSideItems.map(i => ({ symbol: i.symbol.toUpperCase(), change: i.change }));
-  volumeTopList = volumeTop.items.map(i => ({ symbol: i.symbol.toUpperCase(), volume: i.volume }));
+  volumeTopList = spotVolumeTop.map(i => ({ symbol: i.symbol.toUpperCase(), volume: i.volume }));
   applyPinnedToWatch();
 
   lastRefreshAt = Date.now();

@@ -1,5 +1,6 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
 import { isTradFiSymbol, loadTradFiExclusions } from './tradfi-symbol-filter.mjs';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 setupProxyFromEnv();
 
@@ -214,7 +215,7 @@ export async function scanRightSide({
 } = {}) {
   await loadTradFiExclusions();
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
-  const symbols = tickers
+  const rawSymbols = tickers
     .filter(t => t.symbol.endsWith('USDT') && !isTradFiSymbol(t.symbol))
     .map(t => ({
       symbol: t.symbol,
@@ -224,6 +225,8 @@ export async function scanRightSide({
     }))
     .sort((a, b) => b.volume - a.volume)
     .slice(0, limit);
+
+  const symbols = await filterSpotItems(rawSymbols);
 
   const results = [];
   await pmap(symbols, async (item) => {
@@ -256,7 +259,7 @@ export async function scanRightStable({
 } = {}) {
   await loadTradFiExclusions();
   const tickers = await fetchJSON(`${FAPI_BASE}/fapi/v1/ticker/24hr`);
-  const symbols = tickers
+  const rawSymbols = tickers
     .filter(t => t.symbol.endsWith('USDT') && !isTradFiSymbol(t.symbol))
     .map(t => ({
       symbol: t.symbol,
@@ -266,6 +269,8 @@ export async function scanRightStable({
     }))
     .sort((a, b) => b.volume - a.volume)
     .slice(0, limit);
+
+  const symbols = await filterSpotItems(rawSymbols);
 
   const results = [];
   await pmap(symbols, async (item) => {

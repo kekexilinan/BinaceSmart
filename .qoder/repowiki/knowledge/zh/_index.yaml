@@ -3,7 +3,7 @@ schema_version: 1
 locale: zh-CN
 branch: feat/smart-trend-dynamic-watch
 nodes_managed: true
-exported_at: "2026-07-12T09:54:02Z"
+exported_at: "2026-07-14T02:46:50Z"
 modules:
     "":
         dir_name: 币安合约监控套件（根编排层）
@@ -32,8 +32,8 @@ modules:
         depends_on: []
         related_to: []
     http_server:
-        dir_name: 币安合约监控 Web 服务与面板
-        title: 币安合约监控 Web 服务与面板
+        dir_name: HTTP 监控服务入口与代理层
+        title: HTTP 监控服务入口与代理层
         scope:
             - server.mjs
             - index.html
@@ -59,20 +59,31 @@ modules:
             - path: http_server
             - path: signal_scanners
     scripts:
-        dir_name: 运维与开发辅助脚本集
-        title: 运维与开发辅助脚本集
+        dir_name: 开发与部署辅助脚本集
+        title: 开发与部署辅助脚本集
         scope:
             - scripts/
             - dev-restart.mjs
             - start-dev.bat
         source_files: []
+        children:
+            - scripts/preview_rebound_features
+        depends_on: []
+        related_to: []
+    scripts/preview_rebound_features:
+        dir_name: 反弹与背离功能预览脚本
+        title: 反弹与背离功能预览脚本
+        scope:
+            - scripts/preview-rebound-features.mjs
+        source_files: []
         children: []
         depends_on: []
         related_to:
+            - path: signal_scanners
             - path: smart_trend
     signal_scanners:
-        dir_name: Binance Futures 多维度扫描器集合
-        title: Binance Futures 多维度扫描器集合
+        dir_name: Binance Futures 多策略扫描器集合
+        title: Binance Futures 多策略扫描器集合
         scope:
             - scan-smart-signal.mjs
             - scan-stable.mjs
@@ -84,10 +95,10 @@ modules:
         depends_on: []
         related_to:
             - path: position_health
-            - path: smart_trend
+            - path: scripts/preview_rebound_features
     smart_trend:
-        dir_name: 聪明钱趋势监控与决策引擎
-        title: 聪明钱趋势监控与决策引擎
+        dir_name: 聪明钱趋势监控与操作清单生成
+        title: 聪明钱趋势监控与操作清单生成
         scope:
             - smart-trend-monitor.mjs
             - smart-trend-decision.mjs
@@ -98,5 +109,4 @@ modules:
         depends_on: []
         related_to:
             - path: http_server
-            - path: scripts
-            - path: signal_scanners
+            - path: scripts/preview_rebound_features

@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: http_server
-title: 币安合约监控 Web 服务与面板
+title: HTTP 监控服务入口与代理层
 scope:
     - server.mjs
     - index.html

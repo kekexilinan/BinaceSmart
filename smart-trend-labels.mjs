@@ -254,25 +254,30 @@ export function fundingChangeLabel(prev, cur, deltaPct) {
 }
 
 export const DIGEST_TABLE_COLUMNS = [
-  { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
-  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
+  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
 ];
 
-export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true } = {}) {
-  return rows.map(r => ({
-    coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
-    ratio: ratioCellDisplay(r, highlightPct),
-    divergence: formatDivergence(r),
-    price: priceCellDisplay(r, highlightPct),
-    hints8am: r.hints8amLabel || '-',
-    mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
-    funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
-  }));
+export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true, heldSymbols = new Set() } = {}) {
+  return rows.map(r => {
+    const isHeld = heldSymbols.has(r.symbol?.toUpperCase());
+    const hasSpot = r.hasSpot === true;
+    const coinLabel = (isHeld || hasSpot) ? `~~${r.label}~~` : r.label;
+    return {
+      coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${coinLabel}`,
+      ratio: ratioCellDisplay(r, highlightPct),
+      divergence: formatDivergence(r),
+      price: priceCellDisplay(r, highlightPct),
+      hints8am: r.hints8amLabel || '-',
+      mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
+      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+    };
+  });
 }
 
 const BOARD_SOURCE_LABELS = {
@@ -291,26 +296,30 @@ export function formatBoardSources(sources) {
 
 /** 榜单汇总专用列定义：末尾增加「标签」列，标识收录来源 */
 export const RANKING_TABLE_COLUMNS = [
-  { name: 'coin', display_name: '币种', data_type: 'text', width: '80px' },
+  { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
-  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
+  { name: 'divergence', display_name: '背离', data_type: 'lark_md', width: '90px' },
   { name: 'funding', display_name: '资金费变化', data_type: 'text', width: 'auto' },
   { name: 'sources', display_name: '标签', data_type: 'text', width: '100px' },
 ];
 
 /** 榜单汇总专用行构建：比 buildDigestTableRows 多输出 sources（标签）列 */
 export function buildRankingTableRows(rows, highlightPct, { showPinIcon = true } = {}) {
-  return rows.map(r => ({
-    coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${r.label}`,
-    ratio: ratioCellDisplay(r, highlightPct),
-    divergence: formatDivergence(r),
-    price: priceCellDisplay(r, highlightPct),
-    hints8am: r.hints8amLabel || '-',
-    mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
-    funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
-    sources: formatBoardSources(r.sources),
-  }));
+  return rows.map(r => {
+    const hasSpot = r.hasSpot === true;
+    const coinLabel = hasSpot ? `~~${r.label}~~` : r.label;
+    return {
+      coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${coinLabel}`,
+      ratio: ratioCellDisplay(r, highlightPct),
+      divergence: formatDivergence(r),
+      price: priceCellDisplay(r, highlightPct),
+      hints8am: r.hints8amLabel || '-',
+      mc: fmtMcVolume(r.marketCapLabel, r.volume24h),
+      funding: fundingChangeLabel(r.prevFundingRate, r.fundingRate, r.fundingDeltaPct),
+      sources: formatBoardSources(r.sources),
+    };
+  });
 }

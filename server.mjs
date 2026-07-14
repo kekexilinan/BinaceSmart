@@ -12,6 +12,7 @@ import { scanMomentumLong } from './scan-momentum.mjs';
 import { recordWhaleSnapshot, getWhaleHistory, getWhaleHistoryBulk, registerActiveSymbol, startWhaleCollector } from './whale-history.mjs';
 import { MAX_MARKET_CAP_USD, isEligibleMarketCap, formatMaxMarketCapLabel } from './market-cap-filter.mjs';
 import { filterTradFiItems, loadTradFiExclusions, warmupTradFiExclusions, isTradFiSymbol, EXCLUDE_TRADFI_SYMBOLS } from './tradfi-symbol-filter.mjs';
+import { warmupSpotSymbols, FILTER_SPOT_ONLY } from './spot-symbol-check.mjs';
 import {
   initStrategyReview, savePredictionSnapshot, runStrategyReview,
   getStrategyReviews, getLatestPredictions, startStrategyReviewScheduler,
@@ -590,6 +591,14 @@ const SMART_TREND_WATCH_SYMBOLS = new Set(
 );
 const SMART_TREND_DIVERGENCE_THRESHOLD = parseFloat(process.env.SMART_TREND_DIVERGENCE_THRESHOLD || '0.25', 10);
 const REBOUND_HIGHLIGHT_CHANGE_PCT = parseFloat(process.env.REBOUND_HIGHLIGHT_CHANGE_PCT || '15', 10);
+/** 现货持仓列表（逗号分隔），有现货的币不推荐做多 */
+const SPOT_HOLDINGS = new Set(
+  (process.env.SPOT_HOLDINGS || '')
+    .split(/[,，\s]+/)
+    .map(s => s.trim().toUpperCase())
+    .filter(Boolean)
+    .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
+);
 
 let pumpSmartRunning = false;
 let dumpAlertRunning = false;
@@ -1972,6 +1981,22 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/refresh-watchlist' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    res.writeHead(200, headers);
+    res.end(JSON.stringify({ ok: true, message: '已触发监控池刷新' }));
+    refreshSmartTrendWatchlist({ force: true })
+      .then(r => console.log(`  📋 监控池手动刷新完成: ${r.symbols?.length || 0} 个`))
+      .catch(e => console.warn(`  ⚠ 监控池刷新失败: ${e.message}`));
+    return;
+  }
+
+  if (url.pathname === '/api/refresh-watchlist' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/scan-momentum') {
     const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '30', 10));
     const minScore = parseInt(url.searchParams.get('minScore') || '3', 10);
@@ -2035,6 +2060,9 @@ server.listen(PORT, () => {
       .then((n) => console.log(`  🏦 TradFi 过滤: 排除股票/TradFi/商品合约 (${n} 个)`))
       .catch((e) => console.warn(`  ⚠ TradFi 过滤加载失败: ${e.message}`));
   }
+  warmupSpotSymbols()
+    .then((n) => console.log(`  💱 现货检查: 已加载 ${n} 个现货交易对${FILTER_SPOT_ONLY ? '（仅保留有现货的合约）' : '（用于标记删除线）'}`))
+    .catch((e) => console.warn(`  ⚠ 现货检查加载失败: ${e.message}`));
   console.log(`  ⏹  Ctrl+C 退出\n`);
   // 预热8点基准价缓存，避免首次打开涨幅榜等待过久（开机时等待网络就绪）
   waitForNetworkReady('币安 API')
@@ -2116,6 +2144,15 @@ server.listen(PORT, () => {
     getWhaleHistory,
     getWhaleHistoryBulk,
     batchEnrichDigest: batchEnrichSmartTrendDigest,
+    getHeldSymbols: async () => {
+      try {
+        const positions = await getUserPositions();
+        // 合约持仓 + 现货持仓（SPOT_HOLDINGS）均视为持有，不推荐做多
+        const held = new Set(positions.map(p => p.symbol.toUpperCase()));
+        for (const s of SPOT_HOLDINGS) held.add(s);
+        return held;
+      } catch { return new Set(SPOT_HOLDINGS); }
+    },
   })).then(() => startSmartTrendScheduler()).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
   });

@@ -1,4 +1,5 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 setupProxyFromEnv();
 
@@ -92,7 +93,8 @@ async function pmap(items, fn, concurrency = 3) {
 }
 
 export async function scanMomentumLong({ candidates = [], minScore = 3, concurrency = 3 } = {}) {
-  const filtered = candidates.filter(c => c.change >= 15).slice(0, 30);
+  const preFiltered = candidates.filter(c => c.change >= 15).slice(0, 30);
+  const filtered = await filterSpotItems(preFiltered);
   const results = [];
   await pmap(filtered, async (item) => {
     const r = await checkMomentumLong(item.symbol, item.change);

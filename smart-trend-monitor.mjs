@@ -26,6 +26,7 @@ import {
   buildReboundHighlightElements,
 } from './smart-trend-labels.mjs';
 import { fetchJson } from './proxy-setup.mjs';
+import { loadSpotSymbols, hasSpotTrading } from './spot-symbol-check.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
@@ -918,6 +919,7 @@ function serializePushRow(r) {
     whaleRatio: r.whaleRatio ?? null,
     globalRatio: r.globalRatio ?? null,
     divergence: r.divergence ?? null,
+    hasSpot: r.hasSpot ?? null,
   };
 }
 
@@ -967,10 +969,17 @@ export async function runSmartTrendPush({ force = false } = {}) {
     const allRows = [...rowMap.values()];
     await attachRatio8amDeltas(allRows);
     recordHints8amCounts(allRows);
+
     const enriched = deps.batchEnrichDigest
       ? await deps.batchEnrichDigest(allRows).catch(() => allRows)
       : allRows;
     finalizeMarketState(enriched);
+
+    // 加载现货交易对信息，为每行标记是否有现货（在 enrichment 之后赋值，确保不被覆盖）
+    await loadSpotSymbols().catch(() => {});
+    for (const row of enriched) {
+      row.hasSpot = hasSpotTrading(row.symbol);
+    }
 
     const enrichedMap = new Map(enriched.map(r => [r.symbol, r]));
 
@@ -1065,6 +1074,8 @@ export async function runSmartTrendPush({ force = false } = {}) {
     let sent = 0;
     const mergeCards = deps.mergeCards !== false;
     const outlook = computeMarketOutlook(enriched, undefined, deps.divergenceThreshold ?? 0.25);
+    /** 加载已持仓币种，不推荐做多 */
+    const heldSymbols = typeof deps.getHeldSymbols === 'function' ? await deps.getHeldSymbols() : new Set();
     const decisionPush = buildSmartTrendDecision({
       boards: boards.filter(b => b.rows.length),
       outlook,
@@ -1072,6 +1083,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
       previousState: decisionState,
       divergenceThreshold: deps.divergenceThreshold ?? 0.25,
       reboundHighlightPct: deps.reboundHighlightPct ?? 15,
+      heldSymbols,
     });
     queueSaveDecisionState(decisionPush.nextState);
 
@@ -1113,7 +1125,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
     if (deps.decisionEnabled && deps.sendDecisionCard) {
       try {
-        const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct });
+        const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct, heldSymbols });
         await deps.sendDecisionCard(
           `🎯 聪明钱操作清单 · ${decisionPush.summary.verdict}`,
           elements,

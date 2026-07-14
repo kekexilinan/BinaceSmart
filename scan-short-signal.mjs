@@ -1,4 +1,5 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 setupProxyFromEnv();
 
@@ -258,7 +259,7 @@ export async function scanShortSignals({
   }
 
   candidates.sort((a, b) => Math.abs(b.change) - Math.abs(a.change));
-  const toScan = candidates.slice(0, limit);
+  const toScan = await filterSpotItems(candidates.slice(0, limit));
 
   const results = [];
   await pmap(toScan, async (item) => {

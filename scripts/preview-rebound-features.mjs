@@ -93,14 +93,16 @@ async function main() {
     0, parseInt(process.env.SMART_TREND_MIN_RANKING_VOLUME_24H || String(DEFAULT_MIN_RANKING_VOLUME_24H), 10) || 0,
   );
 
-  // 生成决策（会产出 reboundHighlights）
+  // 生成决策（会产出 reboundHighlights 和 heldSymbols 过滤）
   const highlightPct = mock.highlightPct ?? 10;
+  const heldSymbols = new Set(['BTWUSDT', 'BANKUSDT', 'DEXEUSDT', 'LUMIAUSDT']); // 模拟已持仓币种（含现货LUMIA）
   const decision = buildSmartTrendDecision({
     boards: mock.boards,
     outlook: mock.outlook,
     highlightPct,
     divergenceThreshold,
     reboundHighlightPct,
+    heldSymbols,
     previousState: {},
     now: mock.capturedAt || Date.now(),
   });
@@ -132,7 +134,7 @@ async function main() {
   await new Promise(r => setTimeout(r, 2500));
 
   // --- 第2次推送：操作清单卡片（含 rebound_watch 信号） ---
-  const decisionElements = buildSmartTrendDecisionElements(decision, { highlightPct });
+  const decisionElements = buildSmartTrendDecisionElements(decision, { highlightPct, heldSymbols });
   decisionElements.unshift({
     tag: 'markdown',
     content: `**🧪 新功能预览（合成数据）** · 背离信号触发 rebound_watch 观察`,

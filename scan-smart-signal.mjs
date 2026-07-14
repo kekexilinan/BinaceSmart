@@ -1,4 +1,5 @@
 import { setupProxyFromEnv, fetchJson as fetchJSON } from './proxy-setup.mjs';
+import { filterSpotItems } from './spot-symbol-check.mjs';
 
 setupProxyFromEnv();
 import { execFile } from 'node:child_process';
@@ -197,10 +198,12 @@ export async function scanSmartSignal({
     .sort((a, b) => b.volume - a.volume)
     .slice(0, limit);
 
+  const spotFiltered = await filterSpotItems(symbols);
+
   const results = [];
   let done = 0;
 
-  await pmap(symbols, async (item) => {
+  await pmap(spotFiltered, async (item) => {
     try {
       const raw = await fetchSmartSignal(item.symbol);
       const analysis = analyzeSmartSignal(raw, item.price);
@@ -222,7 +225,7 @@ export async function scanSmartSignal({
       }
     } catch {}
     done++;
-    if (onProgress) onProgress(done, symbols.length);
+    if (onProgress) onProgress(done, spotFiltered.length);
   }, concurrency);
 
   if (direction === 'long') {
