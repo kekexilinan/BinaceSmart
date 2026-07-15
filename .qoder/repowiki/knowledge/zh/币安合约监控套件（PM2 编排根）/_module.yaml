@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: ""
-title: 币安合约监控套件（根编排层）
+title: 币安合约监控套件（PM2 编排根）
 scope:
     - README.md
     - .gitignore

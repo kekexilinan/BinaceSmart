@@ -65,6 +65,24 @@ export function ratioCellDisplay(row, highlightPct = 10, ratioText = null) {
   return result;
 }
 
+/** 大户持仓多空比 / 全网多空人数比：1h 变化 | 8am 变化，如 2.58→2.95 🔥📈 (+14.3%) | 8am2.10→2.58 🔥📈 (+22.9%) */
+export function whaleRatioCellDisplay(row, highlightPct = 10) {
+  if (row.whaleGlobalRatio == null) return '-';
+  const ratio = row.prevWhaleGlobalRatio != null
+    ? `${row.prevWhaleGlobalRatio.toFixed(2)}→${Number(row.whaleGlobalRatio).toFixed(2)}`
+    : Number(row.whaleGlobalRatio).toFixed(2);
+  const h1 = ratioChangeSuffix(row.whaleGlobalRatioDeltaPct, highlightPct);
+  let result = h1 ? `${ratio} ${h1}` : ratio;
+  // 8am 变化部分
+  if (row.whaleGlobalRatio8am != null && row.whaleGlobalRatio > 0) {
+    const arrow = `${Number(row.whaleGlobalRatio8am).toFixed(2)}→${Number(row.whaleGlobalRatio).toFixed(2)}`;
+    const suffix = ratioChangeSuffix(row.whaleGlobalRatio8amDeltaPct, highlightPct);
+    const part8 = suffix ? `${arrow} ${suffix}` : arrow;
+    result = `${result} | 8am${part8}`;
+  }
+  return result;
+}
+
 export function priceChangeSuffix(pct) {
   if (pct == null || Number.isNaN(pct)) return '-';
   return `${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%`;
@@ -256,6 +274,7 @@ export function fundingChangeLabel(prev, cur, deltaPct) {
 export const DIGEST_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
+  { name: 'whaleRatio', display_name: '大户/全网多空比', data_type: 'text', width: '220px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
@@ -271,6 +290,7 @@ export function buildDigestTableRows(rows, highlightPct, { showPinIcon = true, h
     return {
       coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${coinLabel}`,
       ratio: ratioCellDisplay(r, highlightPct),
+      whaleRatio: whaleRatioCellDisplay(r, highlightPct),
       divergence: formatDivergence(r),
       price: priceCellDisplay(r, highlightPct),
       hints8am: r.hints8amLabel || '-',
@@ -298,6 +318,7 @@ export function formatBoardSources(sources) {
 export const RANKING_TABLE_COLUMNS = [
   { name: 'coin', display_name: '币种', data_type: 'lark_md', width: '80px' },
   { name: 'ratio', display_name: '净多空比', data_type: 'text', width: '180px' },
+  { name: 'whaleRatio', display_name: '大户/全网多空比', data_type: 'text', width: '220px' },
   { name: 'price', display_name: '价格', data_type: 'text', width: '200px' },
   { name: 'hints8am', display_name: '8am推', data_type: 'text', width: '80px' },
   { name: 'mc', display_name: '市值/成交额', data_type: 'text', width: '120px' },
@@ -314,6 +335,7 @@ export function buildRankingTableRows(rows, highlightPct, { showPinIcon = true }
     return {
       coin: `${showPinIcon && r.pinned ? '📌 ' : ''}${coinLabel}`,
       ratio: ratioCellDisplay(r, highlightPct),
+      whaleRatio: whaleRatioCellDisplay(r, highlightPct),
       divergence: formatDivergence(r),
       price: priceCellDisplay(r, highlightPct),
       hints8am: r.hints8amLabel || '-',

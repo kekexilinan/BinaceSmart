@@ -99,6 +99,34 @@ function enrichMockRowsForPreview(rows) {
       }
     }
 
+    // —— whaleRatio 字段合成：当 prevWhaleRatio / whaleRatioDeltaPct 缺失时生成拟真数据 ——
+    if (next.whaleRatio != null && next.whaleRatio > 0) {
+      const hash = symHash(next.symbol || `row${idx}`);
+      if (next.prevWhaleRatio == null) {
+        const dp = syntheticDeltaPct(hash, 3);
+        next.prevWhaleRatio = next.whaleRatio / (1 + dp / 100);
+        if (next.whaleRatioDeltaPct == null) next.whaleRatioDeltaPct = dp;
+      }
+    }
+
+    // —— whaleGlobalRatio 合成：当缺失时用 whaleRatio/globalRatio 计算 ——
+    if (next.whaleGlobalRatio == null && next.whaleRatio != null && next.globalRatio != null && next.globalRatio > 0) {
+      next.whaleGlobalRatio = next.whaleRatio / next.globalRatio;
+    }
+    if (next.whaleGlobalRatio != null && next.whaleGlobalRatio > 0) {
+      const hash = symHash((next.symbol || `row${idx}`) + '_wg');
+      if (next.prevWhaleGlobalRatio == null) {
+        const dp = syntheticDeltaPct(hash, 5);
+        next.prevWhaleGlobalRatio = next.whaleGlobalRatio / (1 + dp / 100);
+        if (next.whaleGlobalRatioDeltaPct == null) next.whaleGlobalRatioDeltaPct = dp;
+      }
+      if (next.whaleGlobalRatio8am == null) {
+        const dp8 = syntheticDeltaPct(hash, 11);
+        next.whaleGlobalRatio8am = next.whaleGlobalRatio / (1 + dp8 / 100);
+        if (next.whaleGlobalRatio8amDeltaPct == null) next.whaleGlobalRatio8amDeltaPct = dp8;
+      }
+    }
+
     // —— hints8amScore 回填：旧 mock 数据仅有显示字符串，需解析回数值参与排序 ——
     if (next.hints8amScore == null) {
       const m = String(next.hints8amLabel ?? '').match(/^([+-]?\d+)$/);

@@ -1,6 +1,6 @@
 schema_version: 1
 module_path: smart_trend
-title: 聪明钱趋势监控与操作清单生成
+title: 聪明钱趋势监控与决策引擎
 scope:
     - smart-trend-monitor.mjs
     - smart-trend-decision.mjs
@@ -9,5 +9,6 @@ scope:
 source_files: []
 depends_on: []
 related_to:
-    - path: http_server
     - path: scripts/preview_rebound_features
+    - path: signal_scanners
+    - path: spot_symbol_check

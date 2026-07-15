@@ -2,6 +2,8 @@ import { changeTrendLabel, tradeHintLabel, DIGEST_TABLE_COLUMNS, buildDigestTabl
 
 const DECISION_STATE_MAX_AGE_MS = 48 * 3600 * 1000;
 const DECISION_TABLE_MAX_ROWS = 15;
+/** 做空提示最低市值（USDT），低于此值不推荐做空 */
+const MIN_MARKET_CAP_FOR_SHORT = 10_000_000;
 
 const VIEW_META = {
   trend_long: { label: '趋势做多候选', side: 'long', group: 'action' },
@@ -229,6 +231,7 @@ function mergeRowsBySymbol(boards) {
         'change8am',
         'price',
         'prevPrice',
+        'price8am',
         'priceDeltaPct',
         'fundingRate',
         'prevFundingRate',
@@ -236,8 +239,20 @@ function mergeRowsBySymbol(boards) {
         'hints8amLabel',
         'marketCapLabel',
         'volumeRank',
+        'volume24h',
+        'marketCap',
         'pinned',
         'hasSpot',
+        'whaleRatio',
+        'prevWhaleRatio',
+        'whaleRatioDeltaPct',
+        'whaleGlobalRatio',
+        'prevWhaleGlobalRatio',
+        'whaleGlobalRatioDeltaPct',
+        'whaleGlobalRatio8am',
+        'whaleGlobalRatio8amDeltaPct',
+        'divergence',
+        'globalRatio',
       ]) {
         if (merged[field] == null && row[field] != null) merged[field] = row[field];
       }
@@ -467,14 +482,20 @@ function buildItem(row, highlightPct, previousState, now, divergenceThreshold = 
     priceDeltaPct: num(row.priceDeltaPct),
     hints8amLabel: row.hints8amLabel,
     marketCapLabel: row.marketCapLabel,
+    marketCap: num(row.marketCap),
     fundingRate: num(row.fundingRate),
     prevFundingRate: num(row.prevFundingRate),
     fundingDeltaPct: num(row.fundingDeltaPct),
     pinned: row.pinned ?? hasSource(sources, 'pinned'),
     volume: num(row.volumeRank),
+    volume24h: num(row.volume24h),
     divergence: num(row.divergence),
     whaleRatio: num(row.whaleRatio),
     globalRatio: num(row.globalRatio),
+    whaleGlobalRatio: num(row.whaleGlobalRatio),
+    whaleGlobalRatioDeltaPct: num(row.whaleGlobalRatioDeltaPct),
+    whaleGlobalRatio8am: num(row.whaleGlobalRatio8am),
+    whaleGlobalRatio8amDeltaPct: num(row.whaleGlobalRatio8amDeltaPct),
     hasSpot: row.hasSpot === true,
     reasons: buildReasons(row, sources, tradeView),
   };
@@ -562,6 +583,10 @@ function serializeItem(item) {
     divergence: item.divergence,
     whaleRatio: item.whaleRatio,
     globalRatio: item.globalRatio,
+    whaleGlobalRatio: item.whaleGlobalRatio,
+    whaleGlobalRatioDeltaPct: item.whaleGlobalRatioDeltaPct,
+    whaleGlobalRatio8am: item.whaleGlobalRatio8am,
+    whaleGlobalRatio8amDeltaPct: item.whaleGlobalRatio8amDeltaPct,
     hasSpot: item.hasSpot,
     reasons: item.reasons,
   };
@@ -635,12 +660,14 @@ export function buildSmartTrendDecision({
   const actionLimit = limits.action ?? 5;
   const watchLimit = limits.watch ?? 4;
   const invalidatedLimit = limits.invalidated ?? 3;
+  // 市值低于 1000 万的币种不做空
+  const excludeLowMcShort = (i) => !(i.side === 'short' && i.marketCap != null && i.marketCap < MIN_MARKET_CAP_FOR_SHORT);
   const action = sorted
-    .filter(i => i.group === 'action' && i.status !== 'reversal_watch' && i.score >= 58)
+    .filter(i => excludeLowMcShort(i) && i.group === 'action' && i.status !== 'reversal_watch' && i.score >= 58)
     .slice(0, actionLimit);
   const actionSymbols = new Set(action.map(i => i.symbol));
   const watch = sorted
-    .filter(i => !actionSymbols.has(i.symbol))
+    .filter(i => excludeLowMcShort(i) && !actionSymbols.has(i.symbol))
     .slice(0, watchLimit);
   const invalidatedTop = invalidated
     .sort((a, b) => (b.previousScore || 0) - (a.previousScore || 0))
@@ -649,7 +676,7 @@ export function buildSmartTrendDecision({
   const trackedSymbols = new Set([
     ...action.map(i => i.symbol),
     ...watch.map(i => i.symbol),
-    ...sorted.filter(i => i.score >= 70).map(i => i.symbol),
+    ...sorted.filter(i => excludeLowMcShort(i) && i.score >= 70).map(i => i.symbol),
   ]);
   for (const item of sorted) {
     if (trackedSymbols.has(item.symbol) && item._stateEntry) {

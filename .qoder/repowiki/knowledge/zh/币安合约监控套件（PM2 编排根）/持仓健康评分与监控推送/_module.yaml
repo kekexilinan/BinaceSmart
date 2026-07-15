@@ -9,5 +9,4 @@ scope:
 source_files: []
 depends_on: []
 related_to:
-    - path: http_server
     - path: signal_scanners

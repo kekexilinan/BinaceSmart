@@ -3,11 +3,11 @@ schema_version: 1
 locale: zh-CN
 branch: feat/smart-trend-dynamic-watch
 nodes_managed: true
-exported_at: "2026-07-14T02:46:50Z"
+exported_at: "2026-07-14T08:12:15Z"
 modules:
     "":
-        dir_name: 币安合约监控套件（根编排层）
-        title: 币安合约监控套件（根编排层）
+        dir_name: 币安合约监控套件（PM2 编排根）
+        title: 币安合约监控套件（PM2 编排根）
         scope:
             - README.md
             - .gitignore
@@ -29,11 +29,12 @@ modules:
             - scripts
             - signal_scanners
             - smart_trend
+            - spot_symbol_check
         depends_on: []
         related_to: []
     http_server:
-        dir_name: HTTP 监控服务入口与代理层
-        title: HTTP 监控服务入口与代理层
+        dir_name: HTTP 监控服务器与代理封装
+        title: HTTP 监控服务器与代理封装
         scope:
             - server.mjs
             - index.html
@@ -41,9 +42,7 @@ modules:
         source_files: []
         children: []
         depends_on: []
-        related_to:
-            - path: position_health
-            - path: smart_trend
+        related_to: []
     position_health:
         dir_name: 持仓健康评分与监控推送
         title: 持仓健康评分与监控推送
@@ -56,7 +55,6 @@ modules:
         children: []
         depends_on: []
         related_to:
-            - path: http_server
             - path: signal_scanners
     scripts:
         dir_name: 开发与部署辅助脚本集
@@ -82,8 +80,8 @@ modules:
             - path: signal_scanners
             - path: smart_trend
     signal_scanners:
-        dir_name: Binance Futures 多策略扫描器集合
-        title: Binance Futures 多策略扫描器集合
+        dir_name: USDT 合约多策略扫描器集合
+        title: USDT 合约多策略扫描器集合
         scope:
             - scan-smart-signal.mjs
             - scan-stable.mjs
@@ -96,9 +94,10 @@ modules:
         related_to:
             - path: position_health
             - path: scripts/preview_rebound_features
+            - path: smart_trend
     smart_trend:
-        dir_name: 聪明钱趋势监控与操作清单生成
-        title: 聪明钱趋势监控与操作清单生成
+        dir_name: 聪明钱趋势监控与决策引擎
+        title: 聪明钱趋势监控与决策引擎
         scope:
             - smart-trend-monitor.mjs
             - smart-trend-decision.mjs
@@ -108,5 +107,16 @@ modules:
         children: []
         depends_on: []
         related_to:
-            - path: http_server
             - path: scripts/preview_rebound_features
+            - path: signal_scanners
+            - path: spot_symbol_check
+    spot_symbol_check:
+        dir_name: Binance 现货交易对存在性检查
+        title: Binance 现货交易对存在性检查
+        scope:
+            - spot-symbol-check.mjs
+        source_files: []
+        children: []
+        depends_on: []
+        related_to:
+            - path: smart_trend

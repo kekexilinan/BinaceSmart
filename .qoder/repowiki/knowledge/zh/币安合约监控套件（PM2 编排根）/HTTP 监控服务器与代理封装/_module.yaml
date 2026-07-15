@@ -1,12 +1,10 @@
 schema_version: 1
 module_path: http_server
-title: HTTP 监控服务入口与代理层
+title: HTTP 监控服务器与代理封装
 scope:
     - server.mjs
     - index.html
     - proxy-setup.mjs
 source_files: []
 depends_on: []
-related_to:
-    - path: position_health
-    - path: smart_trend
+related_to: []

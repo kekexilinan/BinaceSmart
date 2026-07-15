@@ -253,6 +253,7 @@ function ensureRatio8amBaseline(row, dateKey, whaleBulk, openTime) {
       ratio8am,
       ratio8amDateKey: dateKey,
       ratio8amSource: source,
+      whaleGlobalRatio8am: row.whaleGlobalRatio ?? prev.whaleGlobalRatio ?? null,
       longHints8am: prev.hintCountDateKey === dateKey ? (prev.longHints8am || 0) : 0,
       shortHints8am: prev.hintCountDateKey === dateKey ? (prev.shortHints8am || 0) : 0,
       hintCountDateKey: dateKey,
@@ -276,6 +277,12 @@ async function attachRatio8amDeltas(rows) {
     row.ratio8amDeltaPct = ratio8am && ratio8am > 0
       ? ((row.ratio - ratio8am) / ratio8am) * 100
       : null;
+    // 大户/全网比值的 8am 基准与变化
+    const prevState = lastState.get(row.symbol);
+    if (row.whaleGlobalRatio != null && prevState?.whaleGlobalRatio8am != null && prevState.whaleGlobalRatio8am > 0) {
+      row.whaleGlobalRatio8am = prevState.whaleGlobalRatio8am;
+      row.whaleGlobalRatio8amDeltaPct = ((row.whaleGlobalRatio - prevState.whaleGlobalRatio8am) / prevState.whaleGlobalRatio8am) * 100;
+    }
   }
   queueSaveState();
   return rows;
@@ -309,6 +316,15 @@ function recordHints8amCounts(rows) {
         else shortC += tier;
       }
     }
+    // 大户/全网多空比 变化也计入推荐计分
+    const wgPct = row.whaleGlobalRatioDeltaPct;
+    if (wgPct != null && !Number.isNaN(wgPct)) {
+      const tier = hintTierScore(Math.abs(wgPct));
+      if (tier > 0) {
+        if (wgPct > 0) longC += tier;
+        else shortC += tier;
+      }
+    }
     row.hints8amLabel = formatHints8amScore(longC, shortC);
     row.hints8amScore = longC - shortC;
     lastState.set(row.symbol, {
@@ -336,6 +352,7 @@ export async function captureDaily8amRatioBaseline(symbols) {
         ratio8am: row.ratio,
         ratio8amDateKey: dateKey,
         ratio8amSource: '8am',
+        whaleGlobalRatio8am: row.whaleGlobalRatio ?? null,
         longHints8am: 0,
         shortHints8am: 0,
         hints8amScore: 0,
@@ -374,8 +391,21 @@ async function scanSymbolForDigest(symbol) {
     divergence = whaleRatio - globalRatioVal;
   }
 
+  // 计算大户持仓多空比 / 全网多空人数比
+  const whaleGlobalRatio = whaleRatio != null && globalRatioVal != null && globalRatioVal > 0
+    ? whaleRatio / globalRatioVal
+    : null;
+
   const ratioDeltaPct = prev?.initialized && prev.ratio > 0
     ? ((analysis.ratio - prev.ratio) / prev.ratio) * 100
+    : null;
+
+  const whaleRatioDeltaPct = prev?.initialized && prev.whaleRatio != null && prev.whaleRatio > 0 && whaleRatio != null
+    ? ((whaleRatio - prev.whaleRatio) / prev.whaleRatio) * 100
+    : null;
+
+  const whaleGlobalRatioDeltaPct = prev?.initialized && prev.whaleGlobalRatio != null && prev.whaleGlobalRatio > 0 && whaleGlobalRatio != null
+    ? ((whaleGlobalRatio - prev.whaleGlobalRatio) / prev.whaleGlobalRatio) * 100
     : null;
 
   lastState.set(sym, {
@@ -384,9 +414,12 @@ async function scanSymbolForDigest(symbol) {
     direction: analysis.direction,
     prevRatio: prev?.initialized ? prev.ratio : null,
     ratio: analysis.ratio,
+    prevWhaleRatio: prev?.initialized ? prev.whaleRatio ?? null : null,
     whaleRatio,
     globalRatio: globalRatioVal,
     divergence,
+    whaleGlobalRatio,
+    prevWhaleGlobalRatio: prev?.initialized ? prev.whaleGlobalRatio ?? null : null,
     initialized: true,
   });
   queueSaveState();
@@ -401,7 +434,12 @@ async function scanSymbolForDigest(symbol) {
     ratioDeltaPct,
     price,
     whaleRatio,
+    prevWhaleRatio: prev?.initialized ? prev.whaleRatio ?? null : null,
+    whaleRatioDeltaPct,
     globalRatio: globalRatioVal,
+    whaleGlobalRatio,
+    prevWhaleGlobalRatio: prev?.initialized ? prev.whaleGlobalRatio ?? null : null,
+    whaleGlobalRatioDeltaPct,
     divergence,
   };
 }
@@ -917,6 +955,13 @@ function serializePushRow(r) {
     volumeRank: r.volumeRank ?? null,
     volume24h: r.volume24h ?? rowVolume24h(r),
     whaleRatio: r.whaleRatio ?? null,
+    prevWhaleRatio: r.prevWhaleRatio ?? null,
+    whaleRatioDeltaPct: r.whaleRatioDeltaPct ?? null,
+    whaleGlobalRatio: r.whaleGlobalRatio ?? null,
+    prevWhaleGlobalRatio: r.prevWhaleGlobalRatio ?? null,
+    whaleGlobalRatioDeltaPct: r.whaleGlobalRatioDeltaPct ?? null,
+    whaleGlobalRatio8am: r.whaleGlobalRatio8am ?? null,
+    whaleGlobalRatio8amDeltaPct: r.whaleGlobalRatio8amDeltaPct ?? null,
     globalRatio: r.globalRatio ?? null,
     divergence: r.divergence ?? null,
     hasSpot: r.hasSpot ?? null,
