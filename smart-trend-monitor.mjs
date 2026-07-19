@@ -1,5 +1,5 @@
 /**
- * 聪明钱监控 · 每 1 小时整点推送全池变化摘要（推送全部币种，≥10% 仅用于显著变化高亮，含资金费变化）
+ * 聪明钱监控 · 每小时50分推送全池变化摘要（推送全部币种，≥10% 仅用于显著变化高亮，含资金费变化）
  */
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -37,7 +37,7 @@ const MOCK_PUSH_FILE = join(DATA_DIR, 'smart-trend-push-mock.json');
 let deps = null;
 let running = false;
 let digestTimer = null;
-/** 已推送的整点 slot（ms），防止同一整点重复推送 */
+/** 已推送的50分 slot（ms），防止同一 slot 重复推送 */
 let lastDigestPushSlotMs = 0;
 /** @type {Map<string, object>} */
 const lastState = new Map();
@@ -64,14 +64,14 @@ export function getNextHourShanghai(now = new Date()) {
   const dateKey = `${p.year}-${p.month}-${p.day}`;
   const hour = parseInt(p.hour, 10);
 
-  const currentSlot = new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`);
+  const currentSlot = new Date(`${dateKey}T${String(hour).padStart(2, '0')}:50:00+08:00`);
   if (currentSlot.getTime() > now.getTime() + 500) return currentSlot;
 
   const nextHour = hour + 1;
   if (nextHour < 24) {
-    return new Date(`${dateKey}T${String(nextHour).padStart(2, '0')}:00:00+08:00`);
+    return new Date(`${dateKey}T${String(nextHour).padStart(2, '0')}:50:00+08:00`);
   }
-  const nextDay = new Date(`${dateKey}T00:00:00+08:00`);
+  const nextDay = new Date(`${dateKey}T00:50:00+08:00`);
   nextDay.setDate(nextDay.getDate() + 1);
   return nextDay;
 }
@@ -80,7 +80,7 @@ export function getCurrentHourSlotShanghai(now = new Date()) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
   const hour = parseInt(p.hour, 10);
-  return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:00:00+08:00`).getTime();
+  return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:50:00+08:00`).getTime();
 }
 
 function sortByRatioChange(rows, tieBreakFn) {
@@ -978,7 +978,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
 
   const slotMs = getCurrentHourSlotShanghai();
   if (!force && slotMs === lastDigestPushSlotMs) {
-    console.log('  ⏭ 聪明钱整点推送跳过: 本小时已推送');
+    console.log('  ⏭ 聪明钱50分推送跳过: 本小时已推送');
     return;
   }
 
@@ -1254,7 +1254,7 @@ export function startSmartTrendScheduler() {
     : syms.map(s => s.replace(/USDT$/, '')).join(', ');
 
   const decisionNote = deps.decisionEnabled ? ' + 新决策摘要' : '';
-  console.log(`  📊 聪明钱榜单推送: 上海时间每整点 · ${deps.mergeCards !== false ? '单卡合并(固定表+榜单表)' : '分卡推送'}${decisionNote} · 24h涨跌幅榜+交易额Top+固定+右侧+总体研判 · 监控 ${watchLabel || '（池为空）'}`);
+  console.log(`  📊 聪明钱榜单推送: 上海时间每小时50分 · ${deps.mergeCards !== false ? '单卡合并(固定表+榜单表)' : '分卡推送'}${decisionNote} · 24h涨跌幅榜+交易额Top+固定+右侧+总体研判 · 监控 ${watchLabel || '（池为空）'}`);
 
   const scheduleNext = () => {
     const next = getNextHourShanghai();

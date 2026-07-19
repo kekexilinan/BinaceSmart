@@ -116,7 +116,7 @@ async function sendHealthPush(items, { kind = 'scheduled' } = {}) {
   const pushHours = deps.pushHours ?? 2;
   const header = kind === 'urgent'
     ? `**🚨 持仓紧急预警** · 监控 ${watchLabel}`
-    : `**💊 持仓健康报告** · 每 ${pushHours}h 整点 · 监控 ${watchLabel}`;
+    : `**💊 持仓健康报告** · 每 ${pushHours}h 50分 · 监控 ${watchLabel}`;
   const content = [`**⏰ ${now}**`, header, '', ...formatHealthLines(items)].join('\n\n');
   const titlePrefix = kind === 'urgent' ? '🚨 持仓紧急' : '💊 持仓健康';
   const title = `${titlePrefix} · ${items.map(a => a.h.label).join(', ')}`;
@@ -163,7 +163,7 @@ export function startPositionHealthScheduler() {
     : '全部手动持仓';
 
   const slots = [];
-  for (let h = 0; h < 24; h += pushHours) slots.push(`${String(h).padStart(2, '0')}:00`);
+  for (let h = 0; h < 24; h += pushHours) slots.push(`${String(h).padStart(2, '0')}:50`);
   console.log(`  💊 持仓健康监控: 上海时间 ${slots.join(' / ')}（每 ${pushHours}h）→ 飞书 · 危险/止损即时推送（${urgentMin}min 扫描，同仓 ${urgentCooldown}min 去重）· 监控 ${watchLabel}`);
 
   const scheduleNext = () => {

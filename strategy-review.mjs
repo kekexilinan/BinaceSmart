@@ -358,7 +358,7 @@ export function startStrategyReviewScheduler() {
   const { getNextReviewTime } = deps;
   const slots = [];
   for (let h = 0; h < 24; h += REVIEW_HOURS) {
-    slots.push(`${String(h).padStart(2, '0')}:00`);
+    slots.push(`${String(h).padStart(2, '0')}:50`);
   }
   console.log(`  🔍 策略复盘: 上海时间 ${slots.join(' / ')}（每 ${REVIEW_HOURS}h）${REVIEW_PUSH_FEISHU && deps.feishuEnabled ? '→ 飞书' : ''}`);
 

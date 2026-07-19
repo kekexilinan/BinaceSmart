@@ -803,10 +803,10 @@ function getNextStablePushTime(now = new Date(), stepHours = 4) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
   for (const h of pushHours) {
-    const slot = new Date(`${dateKey}T${String(h).padStart(2, '0')}:00:00+08:00`);
+    const slot = new Date(`${dateKey}T${String(h).padStart(2, '0')}:50:00+08:00`);
     if (slot.getTime() > now.getTime() + 500) return slot;
   }
-  const nextDay = new Date(`${dateKey}T00:00:00+08:00`);
+  const nextDay = new Date(`${dateKey}T00:50:00+08:00`);
   nextDay.setDate(nextDay.getDate() + 1);
   return nextDay;
 }
@@ -816,7 +816,7 @@ function startStablePushScheduler() {
     console.log(`  ⏸ 稳趋势推送未启用（需配置 FEISHU_WEBHOOK）`);
     return;
   }
-  const slots = getStablePushHours(STABLE_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:00`).join(' / ');
+  const slots = getStablePushHours(STABLE_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:50`).join(' / ');
   console.log(`  🔔 稳趋势推送: 上海时间 ${slots}（每 ${STABLE_PUSH_HOURS}h）→ 飞书`);
 
   const scheduleNext = () => {
@@ -1009,7 +1009,7 @@ function mergeLongWithMomentum(stableLong, momentum) {
 
 function startPredictionSnapshotScheduler() {
   if (process.env.STRATEGY_REVIEW_ENABLED === 'false') return;
-  console.log(`  📸 预测快照: 每小时整点采集（供策略复盘对比）`);
+  console.log(`  📸 预测快照: 每小时50分采集（供策略复盘对比）`);
   const scheduleNext = () => {
     const next = getNextStablePushTime(new Date(), 1);
     const delay = Math.max(0, next.getTime() - Date.now());
@@ -1264,7 +1264,7 @@ async function runDumpAlertPush() {
     const reboundHighCount = dumpResults.filter(r => r.reboundLevel === 'high').length;
     const now = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
     const elements = [
-      { tag: 'markdown', content: `**⏰ ${now}**\n**暴跌预警** · 每 ${DUMP_PUSH_HOURS}h 整点 · 风险≥${DUMP_MIN_RISK}` },
+      { tag: 'markdown', content: `**⏰ ${now}**\n**暴跌预警** · 每 ${DUMP_PUSH_HOURS}h 50分 · 风险≥${DUMP_MIN_RISK}` },
       { tag: 'markdown', content: `**🚨 ${highRisk.length} 高危 · ⚠️ ${warnRisk.length} 警告${reboundHighCount > 0 ? ` · ⚡ ${reboundHighCount} 个高反弹潜力` : ''}**` },
       {
         tag: 'table',
@@ -1447,7 +1447,7 @@ function startDumpPushScheduler() {
     console.log(`  ⏸ 暴跌推送未启用`);
     return;
   }
-  const slots = getStablePushHours(DUMP_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:00`).join(' / ');
+  const slots = getStablePushHours(DUMP_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:50`).join(' / ');
   console.log(`  🚨 暴跌预警推送: 上海时间 ${slots}（每 ${DUMP_PUSH_HOURS}h）→ 飞书`);
 
   const scheduleNext = () => {
@@ -1487,7 +1487,7 @@ function startCombinedPushScheduler() {
     console.log(`  ⏸ 做多+做空推送未启用（需配置 FEISHU_WEBHOOK）`);
     return;
   }
-  const slots = getStablePushHours(COMBINED_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:00`).join(' / ');
+  const slots = getStablePushHours(COMBINED_PUSH_HOURS).map(h => `${String(h).padStart(2, '0')}:50`).join(' / ');
   console.log(`  🔔 做多+做空推送: 上海时间 ${slots}（每 ${COMBINED_PUSH_HOURS}h）→ 飞书`);
 
   const scheduleNext = () => {

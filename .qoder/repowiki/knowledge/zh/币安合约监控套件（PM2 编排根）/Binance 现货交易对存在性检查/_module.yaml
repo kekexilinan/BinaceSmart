@@ -1,9 +1,0 @@
-schema_version: 1
-module_path: spot_symbol_check
-title: Binance 现货交易对存在性检查
-scope:
-    - spot-symbol-check.mjs
-source_files: []
-depends_on: []
-related_to:
-    - path: smart_trend
