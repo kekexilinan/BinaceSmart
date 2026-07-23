@@ -141,7 +141,7 @@ export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
       r.price ?? null,
       r.change24h ?? r.change ?? null,
       r.changeSince8am ?? null,
-      r.topRatio ?? r.whaleRatio ?? null,
+      r.ratio ?? r.topRatio ?? r.whaleRatio ?? null,
       r.globalRatio ?? null,
       r.topVsGlobal ?? null,
       r.ratioDeltaPct ?? null,
@@ -212,8 +212,11 @@ export function queryLatestSnapshot() {
   if (!db) return [];
   const results = db.exec(`
     SELECT s.* FROM symbol_snapshot s
-    INNER JOIN (SELECT MAX(timestamp) as max_ts FROM symbol_snapshot) m
-    ON s.timestamp = m.max_ts
+    INNER JOIN (
+      SELECT symbol, MAX(timestamp) as max_ts
+      FROM symbol_snapshot
+      GROUP BY symbol
+    ) m ON s.symbol = m.symbol AND s.timestamp = m.max_ts
     ORDER BY s.ratio_delta_1h DESC
   `);
   return results.length ? rowsToObjects(results[0]) : [];
