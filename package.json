@@ -17,5 +17,7 @@
     "monitor:btc": "node --use-env-proxy smart-money.mjs BTCUSDT 60",
     "monitor:eth": "node --use-env-proxy smart-money.mjs ETHUSDT 60"
   },
-  "devDependencies": {}
+  "dependencies": {
+    "sql.js": "^1.14.1"
+  }
 }

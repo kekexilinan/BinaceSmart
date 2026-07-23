@@ -26,7 +26,9 @@ import { getUserPositions, addUserPosition, deleteUserPosition } from './user-po
 import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
+import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
 
+import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
 
 // Load .env file
@@ -2033,6 +2035,10 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+
+  // === Trend API ===
+  if (handleTrendAPI(url, req, res)) return;
+
   const filePath = url.pathname === '/' ? '/index.html' : url.pathname;
   const ext = filePath.substring(filePath.lastIndexOf('.'));
   try {
@@ -2046,6 +2052,9 @@ const server = createServer(async (req, res) => {
 });
 
 function bootstrapServices() {
+  // 初始化 DB 存储
+  initDBStorage().catch(e => console.warn("DB init error:", e.message));
+
   if (proxyInfo.enabled) {
     console.log(`  🌐 代理已启用: ${proxyInfo.url}（Smart Signal bapi）`);
   } else {
@@ -2153,6 +2162,7 @@ function bootstrapServices() {
         return held;
       } catch { return new Set(SPOT_HOLDINGS); }
     },
+    onDataReady: saveToDatabase,
   })).then(() => startSmartTrendScheduler()).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
   });

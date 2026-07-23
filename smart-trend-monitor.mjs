@@ -1174,6 +1174,13 @@ export async function runSmartTrendPush({ force = false } = {}) {
       },
     });
 
+    // === DB 存储 ===
+    if (typeof deps.onDataReady === "function") {
+      try {
+        deps.onDataReady({ outlook, enrichedRows: enriched, decisionPush, poolSize: watchSymbolsAfterRefresh.size });
+      } catch (e) { console.warn("  DB callback error:", e.message); }
+    }
+
     if (deps.decisionEnabled && deps.sendDecisionCard) {
       try {
         const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct, heldSymbols });
