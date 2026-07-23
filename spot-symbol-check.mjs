@@ -28,7 +28,7 @@ export async function loadSpotSymbols({ force = false } = {}) {
 
   const data = await fetchJson(SPOT_EXCHANGE_INFO, {
     timeoutMs: 30000,
-    preferCurl: true,
+    preferCurl: process.platform === 'win32',
   });
 
   const spotSymbols = new Set();

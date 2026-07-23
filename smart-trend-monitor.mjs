@@ -59,10 +59,16 @@ function getShanghaiParts(date = new Date()) {
   return parts;
 }
 
+/** ICU h24 在部分 Linux 环境会将 00:xx 显示为 hour=24，需归一化为 0-23 */
+function getShanghaiHour(date = new Date()) {
+  const hour = parseInt(getShanghaiParts(date).hour, 10);
+  return hour === 24 ? 0 : hour;
+}
+
 export function getNextHourShanghai(now = new Date()) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
-  const hour = parseInt(p.hour, 10);
+  const hour = getShanghaiHour(now);
 
   const currentSlot = new Date(`${dateKey}T${String(hour).padStart(2, '0')}:50:00+08:00`);
   if (currentSlot.getTime() > now.getTime() + 500) return currentSlot;
@@ -79,7 +85,7 @@ export function getNextHourShanghai(now = new Date()) {
 export function getCurrentHourSlotShanghai(now = new Date()) {
   const p = getShanghaiParts(now);
   const dateKey = `${p.year}-${p.month}-${p.day}`;
-  const hour = parseInt(p.hour, 10);
+  const hour = getShanghaiHour(now);
   return new Date(`${dateKey}T${String(hour).padStart(2, '0')}:50:00+08:00`).getTime();
 }
 

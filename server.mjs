@@ -42,6 +42,7 @@ try {
 const proxyInfo = setupProxyFromEnv();
 
 const PORT = parseInt(process.env.PORT || '3388', 10);
+const WEB_PANEL_ENABLED = process.env.WEB_PANEL_ENABLED !== 'false';
 const FAPI_BASE = 'https://fapi.binance.com';
 const CMC_API_KEY = process.env.CMC_API_KEY || '';
 const CMC_BASE = 'https://pro-api.coinmarketcap.com';
@@ -2044,8 +2045,7 @@ const server = createServer(async (req, res) => {
   }
 });
 
-server.listen(PORT, () => {
-  console.log(`\n  🚀 聪明钱监控面板已启动: http://localhost:${PORT}`);
+function bootstrapServices() {
   if (proxyInfo.enabled) {
     console.log(`  🌐 代理已启用: ${proxyInfo.url}（Smart Signal bapi）`);
   } else {
@@ -2159,4 +2159,14 @@ server.listen(PORT, () => {
   startWhaleCollector().catch(e => {
     console.warn(`  ⚠ 鲸鱼历史采集启动失败: ${e.message}`);
   });
-});
+}
+
+if (WEB_PANEL_ENABLED) {
+  server.listen(PORT, () => {
+    console.log(`\n  🚀 聪明钱监控面板已启动: http://localhost:${PORT}`);
+    bootstrapServices();
+  });
+} else {
+  console.log('\n  📡 飞书推送服务已启动（Web 面板已关闭）');
+  bootstrapServices();
+}

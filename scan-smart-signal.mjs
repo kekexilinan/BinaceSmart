@@ -31,7 +31,8 @@ async function fetchJsonViaCurl(url) {
   const proxy = process.env.HTTPS_PROXY || process.env.HTTP_PROXY;
   if (proxy) args.push('--proxy', proxy);
   args.push(url);
-  const { stdout } = await execFileAsync('curl.exe', args, { maxBuffer: 10 * 1024 * 1024, windowsHide: true });
+  const curlBin = process.platform === 'win32' ? 'curl.exe' : 'curl';
+  const { stdout } = await execFileAsync(curlBin, args, { maxBuffer: 10 * 1024 * 1024, windowsHide: process.platform === 'win32' });
   return JSON.parse(stdout.trim());
 }
 

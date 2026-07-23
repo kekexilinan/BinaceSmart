@@ -2,6 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
+const CURL_BIN = process.platform === 'win32' ? CURL_BIN : 'curl';
 
 /** 从环境变量启用 Node fetch 代理（需配合 node --use-env-proxy） */
 export function setupProxyFromEnv() {
@@ -30,9 +31,9 @@ async function fetchJsonViaCurl(url, { headers = {}, timeoutSec = 15 } = {}) {
     args.push('-H', `${k}: ${v}`);
   }
   args.push(url);
-  const { stdout } = await execFileAsync('curl.exe', args, {
+  const { stdout } = await execFileAsync(CURL_BIN, args, {
     maxBuffer: 20 * 1024 * 1024,
-    windowsHide: true,
+    windowsHide: process.platform === 'win32',
   });
   const text = stdout.trim();
   if (!text) throw new Error(`curl empty response: ${url}`);

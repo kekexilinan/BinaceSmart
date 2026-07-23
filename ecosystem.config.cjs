@@ -1,4 +1,3 @@
-/** PM2 进程配置 — Windows / Linux 通用 */
 const path = require('path');
 
 module.exports = {
@@ -8,7 +7,6 @@ module.exports = {
       script: 'server.mjs',
       cwd: __dirname,
       interpreter: 'node',
-      node_args: '--use-env-proxy',
       instances: 1,
       exec_mode: 'fork',
       autorestart: true,
@@ -16,8 +14,7 @@ module.exports = {
       max_restarts: 10,
       min_uptime: '30s',
       restart_delay: 10000,
-      max_memory_restart: '512M',
-      // Windows: 禁止弹出控制台窗口
+      max_memory_restart: '1G',
       windowsHide: true,
       time: true,
       log_date_format: 'YYYY-MM-DD HH:mm:ss',
@@ -26,6 +23,8 @@ module.exports = {
       merge_logs: true,
       env: {
         NODE_ENV: 'production',
+        STRATEGY_REVIEW_ENABLED: 'false',
+        WHALE_HISTORY_INTERVAL_MIN: '15',
       },
     },
   ],
