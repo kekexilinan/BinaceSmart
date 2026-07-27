@@ -589,7 +589,7 @@ async function loadSymbolTrend(symbol = 'BTCUSDT') {
           const pctColor = (v) => (v||0)>=0 ? '#3fb950' : '#f85149';
           const dirLabel = d.direction === 'long' ? '<span style="color:#3fb950">\u505a\u591a</span>' : d.direction === 'short' ? '<span style="color:#f85149">\u505a\u7a7a</span>' : '<span style="color:#8b949e">\u4e2d\u6027</span>';
           const topGlobal = d.global_ratio > 0 && d.whale_ratio != null ? (d.whale_ratio/d.global_ratio).toFixed(2) + 'x' : '-';
-          const fmtVol = (v) => !v ? '-' : v >= 1e9 ? (v/1e9).toFixed(2)+'B' : v >= 1e6 ? (v/1e6).toFixed(1)+'M' : v >= 1e3 ? (v/1e3).toFixed(0)+'K' : v.toFixed(0);
+          const fmtVol = (v) => !v ? '-' : v >= 1e8 ? (v/1e8).toFixed(1)+'\u4ebf' : v >= 1e4 ? (v/1e4).toFixed(0)+'\u4e07' : v.toFixed(0);
           const capStr = fmtVol(d.market_cap);
           const volStr = fmtVol(d.volume);
           const divergence = ((d.change_24h||0) > 5 && (d.top_ratio||1) < 0.8) || ((d.change_24h||0) < -5 && (d.top_ratio||1) > 1.5);
