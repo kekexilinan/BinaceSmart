@@ -62,7 +62,9 @@ export async function initDB() {
       whale_ratio REAL,
       score REAL,
       market_cap REAL,
-      source TEXT
+      source TEXT,
+      volume REAL,
+      funding_rate REAL
     )
   `);
 
@@ -131,8 +133,8 @@ export function insertSentiment(outlook, poolSize = 0) {
 export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
   if (!db || !rows?.length) return;
   const stmt = db.prepare(`
-    INSERT INTO symbol_snapshot (timestamp, symbol, price, change_24h, change_since_8am, top_ratio, global_ratio, top_vs_global, ratio_delta_1h, ratio_delta_8am, direction, whale_ratio, score, market_cap, source)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    INSERT INTO symbol_snapshot (timestamp, symbol, price, change_24h, change_since_8am, top_ratio, global_ratio, top_vs_global, ratio_delta_1h, ratio_delta_8am, direction, whale_ratio, score, market_cap, source, volume, funding_rate)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `);
   for (const r of rows) {
     stmt.bind([
@@ -151,6 +153,8 @@ export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
       r.score ?? null,
       r.marketCap ?? null,
       Array.isArray(r.sources) ? r.sources.join(',') : (r.source || null),
+      r.volume ?? null,
+      r.fundingRate ?? null,
     ]);
     stmt.step();
     stmt.reset();
@@ -198,7 +202,7 @@ export function querySymbolTrend({ symbol, range = '24h', limit = 200 } = {}) {
   const results = db.exec(`
     SELECT timestamp, symbol, price, change_24h, change_since_8am,
            top_ratio, global_ratio, top_vs_global, ratio_delta_1h, ratio_delta_8am,
-           direction, whale_ratio, score, market_cap
+           direction, whale_ratio, score, market_cap, volume, funding_rate, top_vs_global
     FROM symbol_snapshot
     WHERE symbol = ? AND timestamp >= ?
     ORDER BY timestamp ASC

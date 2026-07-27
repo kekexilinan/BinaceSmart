@@ -2,6 +2,7 @@ import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchSmartSignal } from './scan-smart-signal.mjs';
+import { insertSymbolSnapshots } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
@@ -124,15 +125,95 @@ export async function startWhaleCollector() {
 
   async function tick() {
     await ensureHistoryLoaded();
+    const dbRows = [];
     for (const sym of [...activeSymbols]) {
       try {
         const raw = await fetchSmartSignal(sym);
-        await recordWhaleSnapshot(sym, raw);
+        const snap = await recordWhaleSnapshot(sym, raw);
+        if (snap) {
+          dbRows.push({
+            symbol: sym,
+            ratio: snap.longShortRatio,
+            price: snap.price || null,
+            whaleRatio: snap.whaleRatio,
+            direction: snap.longShortRatio > 1 ? 'long' : snap.longShortRatio < 1 ? 'short' : 'neutral',
+          });
+        }
       } catch (e) {
         console.warn(`  ⚠ 鲸鱼历史采集 ${sym} 失败: ${e.message}`);
       }
     }
     await saveQueue;
+    // Fetch batch prices and write to SQLite DB
+    if (dbRows.length > 0) {
+      try {
+        const { execFileSync } = await import("child_process");
+        const tickerJson = execFileSync("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/ticker/24hr"], { timeout: 12000 }).toString();
+        const tickers = JSON.parse(tickerJson);
+        const tickerMap = new Map(tickers.map(t => [t.symbol, { price: parseFloat(t.lastPrice), change24h: parseFloat(t.priceChangePercent), volume: parseFloat(t.quoteVolume) || 0 }]));
+        for (const row of dbRows) {
+          const t = tickerMap.get(row.symbol);
+          if (t) {
+            row.price = row.price || t.price;
+            row.change24h = t.change24h;
+            row.volume = t.volume;
+          }
+        }
+      } catch (e) { /* ticker fetch failed, continue without */ }
+
+      // Fetch funding rates from premiumIndex
+      try {
+        const { execFileSync: execFunding } = await import("child_process");
+        const fundingJson = execFunding("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/premiumIndex"], { timeout: 12000 }).toString();
+        const fundingArr = JSON.parse(fundingJson);
+        const fundingMap = new Map(fundingArr.map(f => [f.symbol, parseFloat(f.lastFundingRate) * 100]));
+        for (const row of dbRows) {
+          const fr = fundingMap.get(row.symbol);
+          if (fr != null) row.fundingRate = fr;
+        }
+      } catch (e) { /* funding rate fetch failed */ }
+
+      // Batch fetch global long/short ratio (5 at a time with 200ms delay)
+      try {
+        const { execFileSync } = await import("child_process");
+        const batchSize = 10;
+        for (let i = 0; i < dbRows.length; i += batchSize) {
+          const batch = dbRows.slice(i, i + batchSize);
+          await Promise.all(batch.map(async (row) => {
+            try {
+              const url = `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${row.symbol}&period=15m&limit=1`;
+              const res = execFileSync("curl", ["-s", "--max-time", "5", url], { timeout: 8000 }).toString();
+              const arr = JSON.parse(res);
+              if (arr && arr.length > 0) {
+                row.globalRatio = parseFloat(arr[0].longShortRatio);
+              }
+            } catch {}
+          }));
+          if (i + batchSize < dbRows.length) await new Promise(r => setTimeout(r, 300));
+        }
+      } catch (e) { console.warn("  [whale-db] global ratio fetch error:", e.message); }
+      // Batch fetch topLongShortPositionRatio (correct whale_ratio)
+      try {
+        const { execFileSync: execSync2 } = await import("child_process");
+        const batchSize2 = 10;
+        for (let i = 0; i < dbRows.length; i += batchSize2) {
+          const batch = dbRows.slice(i, i + batchSize2);
+          await Promise.all(batch.map(async (row) => {
+            try {
+              const url = `https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${row.symbol}&period=15m&limit=1`;
+              const res = execSync2("curl", ["-s", "--max-time", "5", url], { timeout: 8000 }).toString();
+              const arr = JSON.parse(res);
+              if (arr && arr.length > 0) {
+                row.whaleRatio = parseFloat(arr[0].longShortRatio);
+              }
+            } catch {}
+          }));
+          if (i + batchSize2 < dbRows.length) await new Promise(r => setTimeout(r, 300));
+        }
+      } catch (e) { console.warn("  [whale-db] position ratio fetch error:", e.message); }
+
+      try { insertSymbolSnapshots(dbRows); console.log("  [whale-db] wrote " + dbRows.length + " rows"); } catch (e) { console.warn("  [whale-db] error:", e.message); }
+    }
   }
 
   setTimeout(tick, 15000);
