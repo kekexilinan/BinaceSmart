@@ -107,6 +107,17 @@ tr:hover td { background: #1c2128; }
 .symbol-search-wrap .dropdown-item .tag-long { background: rgba(63,185,80,0.2); color: #3fb950; }
 .symbol-search-wrap .dropdown-item .tag-short { background: rgba(248,81,73,0.2); color: #f85149; }
 
+/* 固定监控币搜索下拉 */
+.pinned-search-wrap { position: relative; flex: 1; min-width: 220px; }
+.pinned-search-wrap input { width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 6px; padding: 6px 10px; color: #e6edf3; font-size: 12px; outline: none; }
+.pinned-search-wrap input:focus { border-color: #58a6ff; }
+.pinned-dropdown { position: absolute; top: 100%; left: 0; background: #161b22; border: 1px solid #30363d; border-radius: 6px; max-height: 240px; overflow-y: auto; width: 100%; z-index: 100; display: none; margin-top: 4px; box-shadow: 0 4px 12px rgba(0,0,0,0.4); }
+.pinned-dropdown.show { display: block; }
+.pinned-dropdown .item { padding: 6px 10px; font-size: 12px; color: #e6edf3; cursor: pointer; display: flex; justify-content: space-between; align-items: center; }
+.pinned-dropdown .item:hover { background: #21262d; }
+.pinned-dropdown .item .tag { font-size: 10px; color: #8b949e; }
+.pinned-dropdown .item .tag.added { color: #3fb950; }
+
 /* ========== Mobile Responsive ========== */
 @media (max-width: 768px) {
   body { padding: 12px; }
@@ -245,7 +256,10 @@ tr:hover td { background: #1c2128; }
   <div style="margin:10px 0;padding:12px;background:#161b22;border:1px solid #30363d;border-radius:8px;">
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
       <span style="color:#8b949e;font-size:12px;">📌 固定监控币：</span>
-      <input type="text" id="pinnedSymbolInput" placeholder="如 AKE, BANK, US（逗号/空格分隔）" autocomplete="off" style="flex:1;min-width:220px;background:#0d1117;border:1px solid #30363d;border-radius:6px;padding:6px 10px;color:#e6edf3;font-size:12px;">
+      <div class="pinned-search-wrap">
+        <input type="text" id="pinnedSymbolInput" placeholder="搜索币种或直接输入，如 AKE / BANK / US" autocomplete="off">
+        <div class="pinned-dropdown" id="pinnedSymbolDropdown"></div>
+      </div>
       <button id="pinnedSymbolAdd" style="background:#238636;border:none;color:#fff;border-radius:6px;padding:6px 14px;font-size:12px;cursor:pointer;">添加</button>
     </div>
     <div id="pinnedSymbolList" style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;min-height:20px;"></div>
@@ -820,7 +834,49 @@ function initPinnedSymbols() {
     const btn = e.target.closest('.pinned-remove');
     if (btn) savePinnedSymbols(pinnedSymbols.filter(s => s !== btn.dataset.symbol));
   });
+  initPinnedSearch();
   loadPinnedSymbols();
+}
+
+// ====== 固定监控币搜索筛选 ======
+let pinnedSearchTimer = null;
+
+async function searchSymbols(q) {
+  if (!q) return [];
+  const resp = await fetchJSON('/api/symbols?q=' + encodeURIComponent(q) + '&limit=30');
+  return (resp && resp.ok) ? (resp.symbols || []) : [];
+}
+
+function initPinnedSearch() {
+  const input = document.getElementById('pinnedSymbolInput');
+  const dd = document.getElementById('pinnedSymbolDropdown');
+  if (!input || !dd) return;
+  input.addEventListener('input', () => {
+    clearTimeout(pinnedSearchTimer);
+    const q = input.value.trim();
+    if (!q) { dd.classList.remove('show'); return; }
+    pinnedSearchTimer = setTimeout(async () => {
+      const list = await searchSymbols(q);
+      if (!list.length) { dd.classList.remove('show'); return; }
+      const existing = new Set(pinnedSymbols);
+      dd.innerHTML = list.map(s =>
+        '<div class="item" data-symbol="' + s + '"><span>' + s.replace('USDT','') + '</span><span class="tag' + (existing.has(s) ? ' added' : '') + '">' + (existing.has(s) ? '已添加 ✓' : '永续') + '</span></div>'
+      ).join('');
+      dd.classList.add('show');
+    }, 250);
+  });
+  input.addEventListener('blur', () => setTimeout(() => dd.classList.remove('show'), 150));
+  dd.addEventListener('mousedown', (e) => {
+    const item = e.target.closest('.item');
+    if (!item) return;
+    e.preventDefault();
+    const s = item.dataset.symbol;
+    if (s && !pinnedSymbols.includes(s)) {
+      savePinnedSymbols([...pinnedSymbols, s]);
+    }
+    dd.classList.remove('show');
+    input.value = '';
+  });
 }
 
 // ====== Board Tabs interaction ======

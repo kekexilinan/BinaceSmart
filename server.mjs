@@ -2026,10 +2026,41 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+/** 币安 USDT 永续合约列表（缓存 1 小时，用于固定监控币搜索筛选） */
+let futuresSymbolsCache = { list: [], ts: 0 };
+async function getFuturesSymbols() {
+  if (futuresSymbolsCache.list.length && Date.now() - futuresSymbolsCache.ts < 3600 * 1000) {
+    return futuresSymbolsCache.list;
+  }
+  const data = await proxyBinance('/fapi/v1/exchangeInfo');
+  const list = (data?.symbols || [])
+    .filter(s => s.quoteAsset === 'USDT' && s.status === 'TRADING' && s.contractType === 'PERPETUAL')
+    .map(s => s.symbol.toUpperCase())
+    .sort();
+  futuresSymbolsCache = { list, ts: Date.now() };
+  console.log(`  📚 币安 USDT 永续合约已加载: ${list.length} 个`);
+  return list;
+}
+
   if (url.pathname === '/api/pinned-symbols' && req.method === 'GET') {
     try {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ ok: true, symbols: [...PINNED_SYMBOLS] }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/symbols' && req.method === 'GET') {
+    try {
+      const q = (url.searchParams.get('q') || '').trim().toUpperCase();
+      const limit = Math.min(50, parseInt(url.searchParams.get('limit') || '30', 10));
+      let list = await getFuturesSymbols();
+      if (q) list = list.filter(s => s.includes(q));
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ ok: true, symbols: list.slice(0, limit) }));
     } catch (e) {
       res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
       res.end(JSON.stringify({ error: e.message }));
