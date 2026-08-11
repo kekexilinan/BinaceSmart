@@ -840,29 +840,53 @@ function initPinnedSymbols() {
 
 // ====== 固定监控币搜索筛选 ======
 let pinnedSearchTimer = null;
+let defaultSymbolsCache = null; // 默认列表缓存（币安 USDT 永续合约）
 
 async function searchSymbols(q) {
-  if (!q) return [];
   const resp = await fetchJSON('/api/symbols?q=' + encodeURIComponent(q) + '&limit=30');
   return (resp && resp.ok) ? (resp.symbols || []) : [];
+}
+
+async function loadDefaultSymbols() {
+  if (defaultSymbolsCache) return defaultSymbolsCache;
+  const resp = await fetchJSON('/api/symbols?limit=50');
+  if (resp && resp.ok) defaultSymbolsCache = resp.symbols || [];
+  return defaultSymbolsCache || [];
+}
+
+function renderPinnedDropdown(list) {
+  const dd = document.getElementById('pinnedSymbolDropdown');
+  if (!dd || !list || !list.length) return;
+  const existing = new Set(pinnedSymbols);
+  dd.innerHTML = list.map(s =>
+    '<div class="item" data-symbol="' + s + '"><span>' + s.replace('USDT','') + '</span><span class="tag' + (existing.has(s) ? ' added' : '') + '">' + (existing.has(s) ? '已添加 ✓' : '永续') + '</span></div>'
+  ).join('');
+  dd.classList.add('show');
 }
 
 function initPinnedSearch() {
   const input = document.getElementById('pinnedSymbolInput');
   const dd = document.getElementById('pinnedSymbolDropdown');
   if (!input || !dd) return;
+
+  // 点击输入框：默认展示可选币种列表（参考单币多空比趋势筛选框）
+  input.addEventListener('click', async () => {
+    if (input.value.trim()) return; // 已有输入内容时由 input 事件处理
+    renderPinnedDropdown(await loadDefaultSymbols());
+  });
+
   input.addEventListener('input', () => {
     clearTimeout(pinnedSearchTimer);
     const q = input.value.trim();
-    if (!q) { dd.classList.remove('show'); return; }
+    if (!q) {
+      // 清空输入：恢复默认列表
+      loadDefaultSymbols().then(list => renderPinnedDropdown(list));
+      return;
+    }
     pinnedSearchTimer = setTimeout(async () => {
       const list = await searchSymbols(q);
       if (!list.length) { dd.classList.remove('show'); return; }
-      const existing = new Set(pinnedSymbols);
-      dd.innerHTML = list.map(s =>
-        '<div class="item" data-symbol="' + s + '"><span>' + s.replace('USDT','') + '</span><span class="tag' + (existing.has(s) ? ' added' : '') + '">' + (existing.has(s) ? '已添加 ✓' : '永续') + '</span></div>'
-      ).join('');
-      dd.classList.add('show');
+      renderPinnedDropdown(list);
     }, 250);
   });
   input.addEventListener('blur', () => setTimeout(() => dd.classList.remove('show'), 150));
