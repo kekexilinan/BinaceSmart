@@ -693,6 +693,7 @@ export function buildSmartTrendDecision({
       symbol: i.symbol,
       price: i.price,
       change24h: i.change24h,
+      statusLabel: i.statusLabel,
       ratio: i.ratio,
       divergence: i.divergence,
       whaleRatio: i.whaleRatio,

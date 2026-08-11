@@ -693,10 +693,10 @@ async function loadDecision() {
     const rows = actions.map(a =>
       '<tr><td><strong>' + a.label + '</strong></td>' +
       '<td><span class="pill ' + pillCls(a.side) + '">' + a.tradeView + '</span></td>' +
-      '<td style="font-size:10px;color:#8b949e">评分 ' + (a.score || '-') + '</td></tr>'
+      '<td style="font-size:10px;color:#8b949e">' + (a.statusLabel || '-') + '</td></tr>'
     ).join('');
     cardAction.innerHTML = '<div class="title"><span class="badge badge-action">重点 ' + actions.length + '</span> 建议操作</div>' +
-      (rows ? '<table><thead><tr><th>币种</th><th>建议</th><th>评分</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无</div>');
+      (rows ? '<table><thead><tr><th>币种</th><th>建议</th><th>连续性</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无</div>');
   }
 
   const cardWatch = document.getElementById('cardWatch');
@@ -705,20 +705,20 @@ async function loadDecision() {
     const rows = allWatch.map(w => {
       const isReb = w.change24h !== undefined;
       const pill = isReb ? '<span class="pill pill-short">反弹观察</span>' : '<span class="pill pill-watch">' + (w.tradeView || '观望') + '</span>';
-      const desc = isReb ? '24h ' + (w.change24h > 0 ? '+' : '') + w.change24h.toFixed(1) + '%' : '评分 ' + (w.score || '-');
-      return '<tr><td><strong>' + w.label + '</strong></td><td>' + pill + '</td><td style="font-size:10px;color:#8b949e">' + desc + '</td></tr>';
+      const cont = w.statusLabel || (isReb ? '急跌反弹' : '-');
+      return '<tr><td><strong>' + w.label + '</strong></td><td>' + pill + '</td><td style="font-size:10px;color:#8b949e">' + cont + '</td></tr>';
     }).join('');
     cardWatch.innerHTML = '<div class="title"><span class="badge badge-watch">观察 ' + allWatch.length + '</span> 持续跟踪</div>' +
-      (rows ? '<table><thead><tr><th>币种</th><th>状态</th><th>说明</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无</div>');
+      (rows ? '<table><thead><tr><th>币种</th><th>状态</th><th>连续性</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无</div>');
   }
 
   const cardInvalid = document.getElementById('cardInvalid');
   if (cardInvalid) {
     const rows = invalids.map(inv =>
-      '<tr><td><strong>' + (inv.label || inv.symbol) + '</strong></td><td>减仓退出</td><td style="font-size:10px;color:#8b949e">' + (inv.reason || '本周期未入选') + '</td></tr>'
+      '<tr><td><strong>' + (inv.label || inv.symbol) + '</strong></td><td>减仓退出</td><td style="font-size:10px;color:#8b949e">' + (inv.statusLabel || '已退出') + '</td></tr>'
     ).join('');
     cardInvalid.innerHTML = '<div class="title"><span class="badge badge-invalid">已失效 ' + invalids.length + '</span> 退出观望</div>' +
-      (rows ? '<table><thead><tr><th>币种</th><th>建议</th><th>原因</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无失效标的</div>');
+      (rows ? '<table><thead><tr><th>币种</th><th>建议</th><th>连续性</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无失效标的</div>');
   }
 
   const verdictEl = document.querySelector('.stat-card:first-child .stat-value');

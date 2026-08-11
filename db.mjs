@@ -171,10 +171,10 @@ export function insertDecisionSnapshot(decision) {
   `, [
     decision.capturedAt || Date.now(),
     decision.summary?.verdict || '',
-    JSON.stringify((decision.action || []).map(i => ({ symbol: i.symbol, label: i.label, tradeView: i.tradeViewLabel, score: i.score, side: i.side }))),
-    JSON.stringify((decision.watch || []).map(i => ({ symbol: i.symbol, label: i.label, tradeView: i.tradeViewLabel, score: i.score }))),
+    JSON.stringify((decision.action || []).map(i => ({ symbol: i.symbol, label: i.label, tradeView: i.tradeViewLabel, score: i.score, side: i.side, statusLabel: i.statusLabel }))),
+    JSON.stringify((decision.watch || []).map(i => ({ symbol: i.symbol, label: i.label, tradeView: i.tradeViewLabel, score: i.score, statusLabel: i.statusLabel }))),
     JSON.stringify((decision.invalidated || []).map(i => ({ symbol: i.symbol, label: i.label, reason: i.reason }))),
-    JSON.stringify((decision.reboundHighlights || []).map(i => ({ symbol: i.symbol, label: i.label, change24h: i.change24h }))),
+    JSON.stringify((decision.reboundHighlights || []).map(i => ({ symbol: i.symbol, label: i.label, change24h: i.change24h, statusLabel: i.statusLabel }))),
   ]);
 }
 
