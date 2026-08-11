@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { createServer } from 'node:http';
-import { readFile } from 'node:fs/promises';
+import { readFile, writeFile, mkdir } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
 import { scanRightStable, scanRightSide } from './scan-stable.mjs';
@@ -574,6 +574,8 @@ const POSITION_HEALTH_WATCH_SYMBOLS = new Set(
 
 const SMART_TREND_DECISION_WEBHOOK = process.env.SMART_TREND_DECISION_WEBHOOK || FEISHU_WEBHOOK;
 const SMART_TREND_DECISION_ENABLED = process.env.SMART_TREND_DECISION_ENABLED !== 'false' && !!SMART_TREND_DECISION_WEBHOOK;
+/** 镜像推送 webhook：配置后所有飞书推送会额外复制一份到该地址（失败不影响主推送） */
+const FEISHU_MIRROR_WEBHOOK = process.env.FEISHU_MIRROR_WEBHOOK || '';
 const SMART_TREND_ENABLED = process.env.SMART_TREND_ENABLED !== 'false' && (!!FEISHU_WEBHOOK || SMART_TREND_DECISION_ENABLED);
 const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN || '60', 10);
 const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
@@ -585,13 +587,51 @@ const SMART_TREND_VOLUME_TOP_N = parseInt(process.env.SMART_TREND_VOLUME_TOP_N |
 const SMART_TREND_MERGE_CARDS = process.env.SMART_TREND_MERGE_CARDS !== 'false';
 const SMART_TREND_MIN_RANKING_VOLUME_24H = Math.max(0, parseInt(process.env.SMART_TREND_MIN_RANKING_VOLUME_24H || '10000000', 10) || 0);
 const SMART_TREND_WATCHLIST_REFRESH_MIN = parseInt(process.env.SMART_TREND_WATCHLIST_REFRESH_MIN || '60', 10);
-const SMART_TREND_WATCH_SYMBOLS = new Set(
+const PINNED_SYMBOLS_FILE = join(__dirname, 'data', 'pinned-symbols.json');
+/** 固定监控币：Web 面板可运行时修改，持久化到 data/pinned-symbols.json；无文件时回退环境变量 */
+const PINNED_SYMBOLS = new Set(
   (process.env.SMART_TREND_WATCH_SYMBOLS || process.env.POSITION_HEALTH_WATCH_SYMBOLS || '')
     .split(/[,，\s]+/)
     .map(s => s.trim().toUpperCase())
     .filter(Boolean)
     .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)),
 );
+
+function normalizeSymbols(list) {
+  return [...new Set((list || [])
+    .map(s => String(s).trim().toUpperCase())
+    .filter(Boolean)
+    .map(s => (s.endsWith('USDT') ? s : `${s}USDT`)))];
+}
+
+/** 启动时从持久化文件恢复固定监控币；返回数据来源 file/env */
+async function loadPinnedSymbols() {
+  try {
+    const raw = await readFile(PINNED_SYMBOLS_FILE, 'utf8');
+    const data = JSON.parse(raw);
+    const list = normalizeSymbols(data.symbols || []);
+    if (list.length) {
+      PINNED_SYMBOLS.clear();
+      for (const s of list) PINNED_SYMBOLS.add(s);
+      console.log(`  📌 固定监控币已从文件恢复: ${list.map(s => s.replace(/USDT$/, '')).join(', ')}`);
+      return 'file';
+    }
+  } catch { /* 首次运行，使用环境变量 */ }
+  if (PINNED_SYMBOLS.size) {
+    console.log(`  📌 固定监控币（环境变量）: ${[...PINNED_SYMBOLS].map(s => s.replace(/USDT$/, '')).join(', ')}`);
+  }
+  return PINNED_SYMBOLS.size ? 'env' : 'none';
+}
+
+/** 更新固定监控币并持久化（返回规范化后的列表） */
+async function savePinnedSymbols(list) {
+  const symbols = normalizeSymbols(list);
+  PINNED_SYMBOLS.clear();
+  for (const s of symbols) PINNED_SYMBOLS.add(s);
+  await mkdir(join(__dirname, 'data'), { recursive: true });
+  await writeFile(PINNED_SYMBOLS_FILE, JSON.stringify({ symbols, updatedAt: Date.now() }, null, 2), 'utf8');
+  return symbols;
+}
 const SMART_TREND_DIVERGENCE_THRESHOLD = parseFloat(process.env.SMART_TREND_DIVERGENCE_THRESHOLD || '0.25', 10);
 const REBOUND_HIGHLIGHT_CHANGE_PCT = parseFloat(process.env.REBOUND_HIGHLIGHT_CHANGE_PCT || '15', 10);
 /** 现货持仓列表（逗号分隔），有现货的币不推荐做多 */
@@ -620,12 +660,30 @@ async function sendFeishu(title, content) {
       elements: [{ tag: 'markdown', content }],
     },
   };
+  const payload = JSON.stringify(body);
   const res = await fetch(FEISHU_WEBHOOK, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
+    body: payload,
   });
-  return res.json();
+  const data = await res.json();
+  mirrorFeishu(payload, FEISHU_WEBHOOK);
+  return data;
+}
+
+/** 镜像推送：向额外 webhook 复制一份消息，失败仅告警不影响主推送 */
+function mirrorFeishu(payload, primaryWebhook) {
+  if (!FEISHU_MIRROR_WEBHOOK || FEISHU_MIRROR_WEBHOOK === primaryWebhook) return;
+  fetch(FEISHU_MIRROR_WEBHOOK, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: payload,
+  })
+    .then(r => r.json())
+    .then(d => {
+      if (d.code !== 0) console.warn(`  ⚠ 飞书镜像推送失败: ${d.msg || JSON.stringify(d)}`);
+    })
+    .catch(e => console.warn(`  ⚠ 飞书镜像推送失败: ${e.message}`));
 }
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
@@ -650,7 +708,10 @@ async function sendFeishuCardV2(title, elements, template = 'blue', webhook = FE
       body: payload,
     });
     const data = await res.json();
-    if (data.code === 0) return data;
+    if (data.code === 0) {
+      mirrorFeishu(payload, webhook);
+      return data;
+    }
     lastErr = new Error(`飞书卡片发送失败: ${data.msg || JSON.stringify(data)}`);
     const msg = String(data.msg || '');
     if (!/frequency|rate|limit|频控|限流/i.test(msg)) throw lastErr;
@@ -1965,6 +2026,44 @@ const server = createServer(async (req, res) => {
     return;
   }
 
+  if (url.pathname === '/api/pinned-symbols' && req.method === 'GET') {
+    try {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ ok: true, symbols: [...PINNED_SYMBOLS] }));
+    } catch (e) {
+      res.writeHead(500, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+      res.end(JSON.stringify({ error: e.message }));
+    }
+    return;
+  }
+
+  if (url.pathname === '/api/pinned-symbols' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', async () => {
+      try {
+        const { symbols } = JSON.parse(body || '{}');
+        const saved = await savePinnedSymbols(symbols);
+        res.writeHead(200, headers);
+        res.end(JSON.stringify({ ok: true, symbols: saved, message: `已保存固定监控币 ${saved.length} 个` }));
+        refreshSmartTrendWatchlist({ force: true })
+          .then(() => console.log(`  📌 固定监控币已更新，监控池已刷新: ${saved.map(s => s.replace(/USDT$/, '')).join(', ')}`))
+          .catch(e => console.warn(`  ⚠ 监控池刷新失败: ${e.message}`));
+      } catch (e) {
+        res.writeHead(400, headers);
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
+    return;
+  }
+
+  if (url.pathname === '/api/pinned-symbols' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST,OPTIONS', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
+    return;
+  }
+
   if (url.pathname === '/api/trigger-smart-trend-push' && req.method === 'POST') {
     const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
     if (!FEISHU_WEBHOOK) {
@@ -2113,6 +2212,7 @@ function bootstrapServices() {
     sendFeishu,
   });
   startPositionHealthScheduler();
+  loadPinnedSymbols().catch(e => console.warn(`  ⚠ 固定监控币加载失败: ${e.message}`));
   initSmartTrendWatchlist({
     enabled: SMART_TREND_ENABLED && SMART_TREND_DYNAMIC_WATCH,
     topN: SMART_TREND_BOARD_TOP_N,
@@ -2125,8 +2225,8 @@ function bootstrapServices() {
     registerActiveSymbol,
     onWatchlistUpdated,
     onDaily8am: (symbols) => captureDaily8amRatioBaseline(symbols),
-    extraSymbols: SMART_TREND_WATCH_SYMBOLS,
-    fallbackSymbols: SMART_TREND_WATCH_SYMBOLS,
+    extraSymbols: PINNED_SYMBOLS,
+    fallbackSymbols: PINNED_SYMBOLS,
     scanRightSide,
     rightSideScanLimit: STABLE_SCAN_LIMIT,
   });
@@ -2141,7 +2241,7 @@ function bootstrapServices() {
     minRankingVolume24h: SMART_TREND_MIN_RANKING_VOLUME_24H,
     divergenceThreshold: SMART_TREND_DIVERGENCE_THRESHOLD,
     reboundHighlightPct: REBOUND_HIGHLIGHT_CHANGE_PCT,
-    watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : SMART_TREND_WATCH_SYMBOLS,
+    watchSymbols: SMART_TREND_DYNAMIC_WATCH ? undefined : PINNED_SYMBOLS,
     getWatchSymbols: SMART_TREND_DYNAMIC_WATCH ? getWatchSymbols : undefined,
     getWatchlistGroups: SMART_TREND_DYNAMIC_WATCH ? getWatchlistGroups : undefined,
     refreshWatchlist: SMART_TREND_DYNAMIC_WATCH

@@ -1,15 +1,20 @@
 import { readFile, writeFile, mkdir } from 'node:fs/promises';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { fetchSmartSignal } from './scan-smart-signal.mjs';
 import { insertSymbolSnapshots } from './db.mjs';
+
+const execFileAsync = promisify(execFile);
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const HISTORY_FILE = join(DATA_DIR, 'whale-history.json');
 
 const INTERVAL_MS = parseInt(process.env.WHALE_HISTORY_INTERVAL_MIN || '5', 10) * 60 * 1000;
-const MAX_POINTS = parseInt(process.env.WHALE_HISTORY_MAX_POINTS || '2016', 10);
+const MAX_POINTS = parseInt(process.env.WHALE_HISTORY_MAX_POINTS || '720', 10);
+const SAVE_DEBOUNCE_MS = parseInt(process.env.WHALE_HISTORY_SAVE_DEBOUNCE_SEC || '30', 10) * 1000;
 const MIN_RECORD_GAP_MS = parseInt(process.env.WHALE_HISTORY_MIN_GAP_MIN || '1', 10) * 60 * 1000;
 const DEFAULT_SYMBOLS = (process.env.WHALE_HISTORY_SYMBOLS || 'SLXUSDT')
   .split(',')
@@ -38,11 +43,25 @@ async function readHistoryFile() {
   }
 }
 
-function queueSave() {
+let savePending = false;
+let saveTimer = null;
+
+function flushSave() {
+  savePending = false;
   saveQueue = saveQueue.then(async () => {
     await mkdir(DATA_DIR, { recursive: true });
     await writeFile(HISTORY_FILE, JSON.stringify(history), 'utf8');
   }).catch(() => {});
+}
+
+/** 防抖保存：高频快照写入合并为一次全量写盘，避免反复序列化大 JSON 拖垮 CPU */
+function queueSave() {
+  savePending = true;
+  if (saveTimer) return;
+  saveTimer = setTimeout(() => {
+    saveTimer = null;
+    if (savePending) flushSave();
+  }, SAVE_DEBOUNCE_MS);
 }
 
 export function extractWhaleSnapshot(raw, price = null) {
@@ -143,12 +162,12 @@ export async function startWhaleCollector() {
         console.warn(`  ⚠ 鲸鱼历史采集 ${sym} 失败: ${e.message}`);
       }
     }
+    if (savePending) flushSave();
     await saveQueue;
     // Fetch batch prices and write to SQLite DB
     if (dbRows.length > 0) {
       try {
-        const { execFileSync } = await import("child_process");
-        const tickerJson = execFileSync("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/ticker/24hr"], { timeout: 12000 }).toString();
+        const { stdout: tickerJson } = await execFileAsync("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/ticker/24hr"], { timeout: 12000, maxBuffer: 64 * 1024 * 1024 });
         const tickers = JSON.parse(tickerJson);
         const tickerMap = new Map(tickers.map(t => [t.symbol, { price: parseFloat(t.lastPrice), change24h: parseFloat(t.priceChangePercent), volume: parseFloat(t.quoteVolume) || 0 }]));
         for (const row of dbRows) {
@@ -163,8 +182,7 @@ export async function startWhaleCollector() {
 
       // Fetch funding rates from premiumIndex
       try {
-        const { execFileSync: execFunding } = await import("child_process");
-        const fundingJson = execFunding("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/premiumIndex"], { timeout: 12000 }).toString();
+        const { stdout: fundingJson } = await execFileAsync("curl", ["-s", "--max-time", "8", "https://fapi.binance.com/fapi/v1/premiumIndex"], { timeout: 12000, maxBuffer: 64 * 1024 * 1024 });
         const fundingArr = JSON.parse(fundingJson);
         const fundingMap = new Map(fundingArr.map(f => [f.symbol, parseFloat(f.lastFundingRate) * 100]));
         for (const row of dbRows) {
@@ -175,14 +193,13 @@ export async function startWhaleCollector() {
 
       // Batch fetch global long/short ratio (5 at a time with 200ms delay)
       try {
-        const { execFileSync } = await import("child_process");
         const batchSize = 10;
         for (let i = 0; i < dbRows.length; i += batchSize) {
           const batch = dbRows.slice(i, i + batchSize);
           await Promise.all(batch.map(async (row) => {
             try {
               const url = `https://fapi.binance.com/futures/data/globalLongShortAccountRatio?symbol=${row.symbol}&period=15m&limit=1`;
-              const res = execFileSync("curl", ["-s", "--max-time", "5", url], { timeout: 8000 }).toString();
+              const { stdout: res } = await execFileAsync("curl", ["-s", "--max-time", "5", url], { timeout: 8000 });
               const arr = JSON.parse(res);
               if (arr && arr.length > 0) {
                 row.globalRatio = parseFloat(arr[0].longShortRatio);
@@ -194,14 +211,13 @@ export async function startWhaleCollector() {
       } catch (e) { console.warn("  [whale-db] global ratio fetch error:", e.message); }
       // Batch fetch topLongShortPositionRatio (correct whale_ratio)
       try {
-        const { execFileSync: execSync2 } = await import("child_process");
         const batchSize2 = 10;
         for (let i = 0; i < dbRows.length; i += batchSize2) {
           const batch = dbRows.slice(i, i + batchSize2);
           await Promise.all(batch.map(async (row) => {
             try {
               const url = `https://fapi.binance.com/futures/data/topLongShortPositionRatio?symbol=${row.symbol}&period=15m&limit=1`;
-              const res = execSync2("curl", ["-s", "--max-time", "5", url], { timeout: 8000 }).toString();
+              const { stdout: res } = await execFileAsync("curl", ["-s", "--max-time", "5", url], { timeout: 8000 });
               const arr = JSON.parse(res);
               if (arr && arr.length > 0) {
                 row.whaleRatio = parseFloat(arr[0].longShortRatio);

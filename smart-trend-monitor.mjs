@@ -1002,15 +1002,25 @@ export async function runSmartTrendPush({ force = false } = {}) {
     const rowMap = new Map();
     let failed = 0;
 
-    for (const sym of watchSymbolsAfterRefresh) {
-      try {
-        const row = await scanSymbolForDigest(sym);
-        rowMap.set(sym.toUpperCase(), row);
-      } catch (e) {
-        failed += 1;
-        console.warn(`  ⚠ 聪明钱扫描 ${sym} 失败: ${e.message}`);
+    // 限流并发扫描（Smart Signal 全局队列已自带 600ms 节流，这里并发主要重叠其它接口的网络等待）
+    const scanStartAt = Date.now();
+    const SCAN_CONCURRENCY = parseInt(process.env.SMART_TREND_SCAN_CONCURRENCY || '5', 10);
+    const symList = [...watchSymbolsAfterRefresh];
+    let scanIdx = 0;
+    async function scanWorker() {
+      while (scanIdx < symList.length) {
+        const sym = symList[scanIdx++];
+        try {
+          const row = await scanSymbolForDigest(sym);
+          rowMap.set(sym.toUpperCase(), row);
+        } catch (e) {
+          failed += 1;
+          console.warn(`  ⚠ 聪明钱扫描 ${sym} 失败: ${e.message}`);
+        }
       }
     }
+    await Promise.all(Array.from({ length: Math.min(SCAN_CONCURRENCY, symList.length) }, () => scanWorker()));
+    console.log(`  ✓ 全池扫描完成: ${rowMap.size} 成功 · ${failed} 失败 · 耗时 ${Math.round((Date.now() - scanStartAt) / 1000)}s`);
 
     if (!rowMap.size) {
       console.warn(`  ⚠ 聪明钱全池扫描: 全部失败，跳过推送`);
