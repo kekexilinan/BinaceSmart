@@ -152,7 +152,7 @@ tr:hover td { background: #1c2128; }
 <div class="header">
   <div>
     <h1>BinaceSmart Dashboard</h1>
-    <div class="sub">币安合约聪明钱监控 · 实时多空趋势分析 · 最后更新: 2026-07-23 02:51 UTC</div>
+    <div class="sub">币安合约聪明钱监控 · 实时多空趋势分析 · 最后更新: <span id="lastUpdate">加载中...</span>（北京时间）</div>
   </div>
   <select class="time-select" id="timeRange">
     <option value="6h">6 小时</option>
@@ -340,6 +340,7 @@ const API_BASE = '';
 const REFRESH_INTERVAL = 5 * 60 * 1000;
 
 let sentChart, ratioChart, pieChart, priceChart, ratioBarChart;
+let latestDataTs = 0; // 各 API 数据中的最新时间戳（毫秒）
 
 function initCharts() {
   sentChart = echarts.init(document.getElementById('sentimentChart'));
@@ -388,6 +389,7 @@ async function loadSentiment() {
 
   // Update verdict card
   const latest = data[data.length - 1];
+  if (latest?.timestamp > latestDataTs) latestDataTs = latest.timestamp;
   const verdictEl = document.querySelector('.stat-value');
   if (verdictEl && latest.verdict) {
     verdictEl.textContent = latest.verdict;
@@ -398,6 +400,8 @@ async function loadLatestSnapshot() {
   const resp = await fetchJSON('/api/trend/latest');
   if (!resp || !resp.ok || !resp.data.length) return;
   const rows = resp.data;
+  const maxTs = rows.reduce((m, r) => Math.max(m, r.timestamp || 0), 0);
+  if (maxTs > latestDataTs) latestDataTs = maxTs;
 
   // Pie chart - direction distribution
   const longCount = rows.filter(r => r.direction === 'long').length;
@@ -663,6 +667,7 @@ async function loadDecision() {
   const resp = await fetchJSON('/api/trend/decision');
   if (!resp || !resp.ok || !resp.data) return;
   const d = resp.data;
+  if (d?.timestamp > latestDataTs) latestDataTs = d.timestamp;
   const actions = d.action || [];
   const watches = d.watch || [];
   const invalids = d.invalidated || [];
@@ -716,7 +721,10 @@ async function loadAll() {
       loadDecision(),
     ]);
     const updateEl = document.getElementById('lastUpdate');
-    if (updateEl) updateEl.textContent = new Date().toLocaleTimeString('zh-CN');
+    if (updateEl) {
+      const ts = latestDataTs || Date.now();
+      updateEl.textContent = new Date(ts).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai', hour12: false });
+    }
   } catch (e) {
     console.warn('Data fetch error:', e.message);
   }
