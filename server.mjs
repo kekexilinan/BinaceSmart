@@ -27,7 +27,7 @@ import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHea
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
-import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './auto-trader.mjs';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -2185,6 +2185,21 @@ async function getFuturesSymbols() {
   if (url.pathname === '/api/auto-trader/status') {
     res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
     res.end(JSON.stringify(getAutoTraderStatus()));
+    return;
+  }
+  if (url.pathname === '/api/auto-trader/tick' && req.method === 'POST') {
+    const headers = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' };
+    res.writeHead(200, headers);
+    runTickNow().then(r => {
+      res.end(JSON.stringify({ ok: true, ...r }));
+    }).catch(e => {
+      res.end(JSON.stringify({ ok: false, reason: e.message }));
+    });
+    return;
+  }
+  if (url.pathname === '/api/auto-trader/tick' && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
+    res.end();
     return;
   }
 

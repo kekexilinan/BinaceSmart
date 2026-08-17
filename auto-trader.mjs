@@ -420,4 +420,16 @@ export function getAutoTraderStatus() {
   };
 }
 
+/** 手动触发一次 tick（调试用） */
+export async function runTickNow() {
+  if (running) return { ok: false, reason: 'tick 正在运行' };
+  const startedAt = Date.now();
+  try {
+    await runTick();
+    return { ok: true, durationMs: Date.now() - startedAt };
+  } catch (e) {
+    return { ok: false, reason: e.message, durationMs: Date.now() - startedAt };
+  }
+}
+
 export { queryActiveAutoOrders as getActiveOrders, queryOpenPositions as getOpenPositions };
