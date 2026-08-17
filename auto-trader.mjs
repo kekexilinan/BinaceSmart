@@ -16,7 +16,7 @@ import {
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
   insertAutoPosition, updateAutoPosition, queryOpenPositions,
-  logAutoTrade,
+  logAutoTrade, queryLatestSnapshot,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -159,17 +159,32 @@ async function loadLatestDecision() {
   if (typeof getDecisionGetter === 'function') {
     try {
       const d = getDecisionGetter();
-      if (d) return d;
+      if (d && (d.action?.length || d.watch?.length)) return d;
     } catch (e) { logger.warn?.(`  ⚠ getLatestDecision 失败: ${e.message}`); }
   }
-  // 回退到磁盘
+  // 回退：从 symbol_snapshot 表取最新一批，重建"做多 high" 候选
   try {
-    const raw = await readFile(DECISION_STATE_FILE, 'utf8');
-    const obj = JSON.parse(raw);
-    // decision-state 格式：{ updatedAt, symbols } — 这是 continuity state，不是 decisionPush
-    // decisionPush 由 onDataReady 写入 symbol_snapshot / decision_snapshot，这里只取 action 的最近一份
-    return obj?.lastDecision || null;
-  } catch { return null; }
+    const snaps = queryLatestSnapshot();
+    if (snaps?.length) {
+      const action = snaps
+        .filter(s => s.direction === 'long' && Number(s.score) >= 40)
+        .map(s => ({
+          symbol: s.symbol,
+          label: s.symbol?.replace(/USDT$/, '') || s.symbol,
+          side: 'long',
+          status: 'continued',
+          statusLabel: '延续',
+          score: Number(s.score) || 0,
+          ratioDeltaPct: Number(s.ratio_delta_1h) || 0,
+          price: Number(s.price) || 0,
+          tradeView: 'trend_long',
+        }))
+        .sort((a, b) => b.score - a.score);
+      logger.log?.(`  ↩ 从 symbol_snapshot 回退: ${action.length} 个做多候选`);
+      return { action, watch: [], rebound: [], timestamp: Date.now(), source: 'snapshot' };
+    }
+  } catch (e) { logger.warn?.(`  ⚠ 回退读 snapshot 失败: ${e.message}`); }
+  return null;
 }
 
 // ==================== 信号校验 ====================
