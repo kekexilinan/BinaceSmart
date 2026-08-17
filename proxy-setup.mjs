@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 
 const execFileAsync = promisify(execFile);
-const CURL_BIN = process.platform === 'win32' ? CURL_BIN : 'curl';
+const CURL_BIN = process.platform === 'win32' ? 'curl.exe' : 'curl';
 
 /** 从环境变量启用 Node fetch 代理（需配合 node --use-env-proxy） */
 export function setupProxyFromEnv() {

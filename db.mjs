@@ -80,11 +80,64 @@ export async function initDB() {
     )
   `);
 
+  // ===== 自动交易 =====
+  db.run(`
+    CREATE TABLE IF NOT EXISTS auto_orders (
+      id              TEXT PRIMARY KEY,
+      symbol          TEXT NOT NULL,
+      side            TEXT NOT NULL,
+      order_type      TEXT DEFAULT 'LIMIT',
+      price           REAL NOT NULL,
+      qty             REAL NOT NULL,
+      binance_id      TEXT,
+      ema_used        TEXT,
+      pullback_pct    REAL,
+      status          TEXT DEFAULT 'pending',
+      smart_money_increased INTEGER DEFAULT 1,
+      in_watchlist    INTEGER DEFAULT 1,
+      created_at      INTEGER NOT NULL,
+      filled_at       INTEGER,
+      cancelled_at    INTEGER,
+      ttl_min         INTEGER DEFAULT 180,
+      meta_json       TEXT
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS auto_positions (
+      id              TEXT PRIMARY KEY,
+      symbol          TEXT NOT NULL,
+      entry_price     REAL NOT NULL,
+      qty             REAL NOT NULL,
+      entry_order_id  TEXT,
+      tp_price        REAL,
+      sl_price        REAL,
+      status          TEXT DEFAULT 'open',
+      opened_at       INTEGER NOT NULL,
+      closed_at       INTEGER,
+      close_reason    TEXT,
+      exit_price      REAL
+    )
+  `);
+
+  db.run(`
+    CREATE TABLE IF NOT EXISTS auto_trades_log (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      ts              INTEGER NOT NULL,
+      symbol          TEXT,
+      action          TEXT,
+      detail          TEXT
+    )
+  `);
+
   // 索引
   db.run('CREATE INDEX IF NOT EXISTS idx_sentiment_ts ON market_sentiment(timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_symbol_ts ON symbol_snapshot(timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_symbol_sym_ts ON symbol_snapshot(symbol, timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_snapshot(timestamp)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_auto_orders_status ON auto_orders(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_auto_positions_status ON auto_positions(status)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_auto_trades_ts ON auto_trades_log(ts)');
 
   // 定期持久化
   saveTimer = setInterval(() => persistDB(), SAVE_INTERVAL_MS);
@@ -273,6 +326,141 @@ function rowsToObjects(result) {
     columns.forEach((col, i) => { obj[col] = row[i]; });
     return obj;
   });
+}
+
+// ==================== 自动交易 CRUD ====================
+
+/** 新增订单 */
+export function insertAutoOrder(order) {
+  if (!db || !order) return;
+  db.run(`
+    INSERT INTO auto_orders (id, symbol, side, order_type, price, qty, binance_id, ema_used, pullback_pct, status, smart_money_increased, in_watchlist, created_at, filled_at, cancelled_at, ttl_min, meta_json)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    order.id, order.symbol, order.side, order.orderType || 'LIMIT',
+    order.price, order.qty, order.binanceId || null,
+    order.emaUsed || null, order.pullbackPct ?? null,
+    order.status || 'pending',
+    order.smartMoneyIncreased ? 1 : 0,
+    order.inWatchlist ? 1 : 0,
+    order.createdAt || Date.now(),
+    order.filledAt ?? null, order.cancelledAt ?? null,
+    order.ttlMin ?? 180,
+    order.meta ? JSON.stringify(order.meta) : null,
+  ]);
+  persistDB();
+}
+
+/** 更新订单状态（status / binance_id / filled_at / cancelled_at / in_watchlist / smart_money_increased） */
+export function updateAutoOrder(id, patch) {
+  if (!db || !id || !patch) return;
+  const keys = [];
+  const vals = [];
+  const allowed = [
+    'status', 'binance_id', 'ema_used', 'pullback_pct',
+    'smart_money_increased', 'in_watchlist', 'filled_at', 'cancelled_at',
+    'price', 'qty', 'meta_json',
+  ];
+  for (const k of Object.keys(patch)) {
+    const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+    if (!allowed.includes(col)) continue;
+    let v = patch[k];
+    if (col === 'meta_json' && typeof v === 'object') v = JSON.stringify(v);
+    if (col === 'smart_money_increased' || col === 'in_watchlist') v = v ? 1 : 0;
+    keys.push(`${col} = ?`);
+    vals.push(v);
+  }
+  if (!keys.length) return;
+  vals.push(id);
+  db.run(`UPDATE auto_orders SET ${keys.join(', ')} WHERE id = ?`, vals);
+  persistDB();
+}
+
+/** 查询订单（按状态过滤，默认 pending） */
+export function queryAutoOrders({ status, symbol, limit = 200 } = {}) {
+  if (!db) return [];
+  const where = [];
+  const params = [];
+  if (status) {
+    if (Array.isArray(status)) {
+      where.push(`status IN (${status.map(() => '?').join(',')})`);
+      params.push(...status);
+    } else {
+      where.push('status = ?');
+      params.push(status);
+    }
+  }
+  if (symbol) { where.push('symbol = ?'); params.push(symbol.toUpperCase()); }
+  const sql = `SELECT * FROM auto_orders ${where.length ? 'WHERE ' + where.join(' AND ') : ''} ORDER BY created_at DESC LIMIT ?`;
+  params.push(limit);
+  const results = db.exec(sql, params);
+  return results.length ? rowsToObjects(results[0]) : [];
+}
+
+/** 查询所有活跃订单（pending + partial） */
+export function queryActiveAutoOrders() {
+  return queryAutoOrders({ status: ['pending', 'partial'] });
+}
+
+/** 新增持仓（买入成交后） */
+export function insertAutoPosition(pos) {
+  if (!db || !pos) return;
+  db.run(`
+    INSERT INTO auto_positions (id, symbol, entry_price, qty, entry_order_id, tp_price, sl_price, status, opened_at, closed_at, close_reason, exit_price)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+  `, [
+    pos.id, pos.symbol, pos.entryPrice, pos.qty,
+    pos.entryOrderId || null, pos.tpPrice ?? null, pos.slPrice ?? null,
+    pos.status || 'open',
+    pos.openedAt || Date.now(), pos.closedAt ?? null,
+    pos.closeReason || null, pos.exitPrice ?? null,
+  ]);
+  persistDB();
+}
+
+export function updateAutoPosition(id, patch) {
+  if (!db || !id || !patch) return;
+  const sets = [];
+  const vals = [];
+  const allowed = ['status', 'tp_price', 'sl_price', 'qty', 'closed_at', 'close_reason', 'exit_price'];
+  for (const k of Object.keys(patch)) {
+    const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
+    if (!allowed.includes(col)) continue;
+    sets.push(`${col} = ?`);
+    vals.push(patch[k]);
+  }
+  if (!sets.length) return;
+  vals.push(id);
+  db.run(`UPDATE auto_positions SET ${sets.join(', ')} WHERE id = ?`, vals);
+  persistDB();
+}
+
+export function queryOpenPositions() {
+  if (!db) return [];
+  const results = db.exec(`SELECT * FROM auto_positions WHERE status = 'open' ORDER BY opened_at DESC`);
+  return results.length ? rowsToObjects(results[0]) : [];
+}
+
+export function queryAllPositions({ limit = 200 } = {}) {
+  if (!db) return [];
+  const results = db.exec(`SELECT * FROM auto_positions ORDER BY opened_at DESC LIMIT ${Number(limit) | 0}`);
+  return results.length ? rowsToObjects(results[0]) : [];
+}
+
+/** 写入操作流水 */
+export function logAutoTrade(symbol, action, detail) {
+  if (!db) return;
+  db.run(`INSERT INTO auto_trades_log (ts, symbol, action, detail) VALUES (?, ?, ?, ?)`, [
+    Date.now(), symbol || null, action || '', typeof detail === 'object' ? JSON.stringify(detail) : (detail || ''),
+  ]);
+}
+
+export function queryAutoTradeLogs({ limit = 200, symbol } = {}) {
+  if (!db) return [];
+  const where = symbol ? `WHERE symbol = ?` : '';
+  const params = symbol ? [symbol.toUpperCase(), limit] : [limit];
+  const results = db.exec(`SELECT * FROM auto_trades_log ${where} ORDER BY ts DESC LIMIT ?`, params);
+  return results.length ? rowsToObjects(results[0]) : [];
 }
 
 /** 关闭数据库 */

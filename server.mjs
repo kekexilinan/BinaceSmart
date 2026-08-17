@@ -24,9 +24,10 @@ import {
 import { evaluatePositionHealth, evaluatePositionsBatch } from './position-health.mjs';
 import { getUserPositions, addUserPosition, deleteUserPosition } from './user-positions.mjs';
 import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHealthPush } from './position-health-monitor.mjs';
-import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline } from './smart-trend-monitor.mjs';
+import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -581,6 +582,20 @@ const SMART_TREND_INTERVAL_MIN = parseInt(process.env.SMART_TREND_INTERVAL_MIN |
 const SMART_TREND_COOLDOWN_MIN = parseInt(process.env.SMART_TREND_COOLDOWN_MIN || '60', 10);
 const SMART_TREND_RATIO_CHANGE_PCT = parseFloat(process.env.SMART_TREND_RATIO_CHANGE_PCT || '10', 10);
 const SMART_TREND_DIGEST_PAGE_SIZE = parseInt(process.env.SMART_TREND_DIGEST_PAGE_SIZE || '10', 10);
+
+// ===== 自动交易 =====
+const AUTO_TRADER_ENABLED = process.env.AUTO_TRADER_ENABLED === 'true';
+const AUTO_TRADER_DRY_RUN = process.env.AUTO_TRADER_DRY_RUN !== 'false';
+const AUTO_TRADER_MARKET = process.env.AUTO_TRADER_MARKET || 'spot';
+const AUTO_TRADER_MAX_POSITIONS = parseInt(process.env.AUTO_TRADER_MAX_POSITIONS || '5', 10);
+const AUTO_TRADER_ORDER_USDT = parseFloat(process.env.AUTO_TRADER_ORDER_USDT || '50');
+const AUTO_TRADER_LEVERAGE = parseInt(process.env.AUTO_TRADER_LEVERAGE || '5', 10);
+const AUTO_TRADER_PULLBACK_LOW_PCT = parseFloat(process.env.AUTO_TRADER_PULLBACK_LOW_PCT || '20');
+const AUTO_TRADER_PULLBACK_HIGH_PCT = parseFloat(process.env.AUTO_TRADER_PULLBACK_HIGH_PCT || '30');
+const AUTO_TRADER_ORDER_TTL_MIN = parseInt(process.env.AUTO_TRADER_ORDER_TTL_MIN || '180', 10);
+const AUTO_TRADER_TP_PCT = parseFloat(process.env.AUTO_TRADER_TP_PCT || '15');
+const AUTO_TRADER_SL_PCT = parseFloat(process.env.AUTO_TRADER_SL_PCT || '10');
+const AUTO_TRADER_TICK_MIN = parseInt(process.env.AUTO_TRADER_TICK_MIN || '50', 10);
 const SMART_TREND_DYNAMIC_WATCH = process.env.SMART_TREND_DYNAMIC_WATCH !== 'false';
 const SMART_TREND_BOARD_TOP_N = parseInt(process.env.SMART_TREND_BOARD_TOP_N || '20', 10);
 const SMART_TREND_VOLUME_TOP_N = parseInt(process.env.SMART_TREND_VOLUME_TOP_N || '50', 10);
@@ -2166,6 +2181,13 @@ async function getFuturesSymbols() {
   }
 
 
+  // === 自动交易 API ===
+  if (url.pathname === '/api/auto-trader/status') {
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' });
+    res.end(JSON.stringify(getAutoTraderStatus()));
+    return;
+  }
+
   // === Trend API ===
   if (handleTrendAPI(url, req, res)) return;
 
@@ -2294,7 +2316,26 @@ function bootstrapServices() {
       } catch { return new Set(SPOT_HOLDINGS); }
     },
     onDataReady: saveToDatabase,
-  })).then(() => startSmartTrendScheduler()).catch(e => {
+  })).then(() => startSmartTrendScheduler()).then(() => {
+    // 启动自动交易调度器（与聪明钱榜单对齐，共用同一 50 分钟周期）
+    return startAutoTrader({
+      enabled: AUTO_TRADER_ENABLED,
+      dryRun: AUTO_TRADER_DRY_RUN,
+      apiKey: process.env.BINANCE_API_KEY || '',
+      apiSecret: process.env.BINANCE_API_SECRET || '',
+      market: AUTO_TRADER_MARKET,
+      maxPositions: AUTO_TRADER_MAX_POSITIONS,
+      orderUsdt: AUTO_TRADER_ORDER_USDT,
+      leverage: AUTO_TRADER_LEVERAGE,
+      pullbackLowPct: AUTO_TRADER_PULLBACK_LOW_PCT,
+      pullbackHighPct: AUTO_TRADER_PULLBACK_HIGH_PCT,
+      orderTtlMin: AUTO_TRADER_ORDER_TTL_MIN,
+      tpPct: AUTO_TRADER_TP_PCT,
+      slPct: AUTO_TRADER_SL_PCT,
+      tickEveryMin: AUTO_TRADER_TICK_MIN,
+      getLatestDecision: getLatestDecisionPush,
+    });
+  }).catch(e => {
     console.warn(`  ⚠ 聪明钱趋势监控初始化失败: ${e.message}`);
   });
   startWhaleCollector().catch(e => {

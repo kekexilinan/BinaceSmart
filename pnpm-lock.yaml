@@ -6,4 +6,17 @@ settings:
 
 importers:
 
-  .: {}
+  .:
+    dependencies:
+      sql.js:
+        specifier: ^1.14.1
+        version: 1.14.2
+
+packages:
+
+  sql.js@1.14.2:
+    resolution: {integrity: sha512-3ZGPovObMFrdw79zrUHbfdE/DLIsy8jdNdssmMSQuRAymedU6q84asPt0kgiqrdMYlPegDItiIMfmIXzZnYFcw==}
+
+snapshots:
+
+  sql.js@1.14.2: {}

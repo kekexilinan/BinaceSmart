@@ -45,6 +45,8 @@ const lastState = new Map();
 let stateMeta = {};
 /** @type {Record<string, object>} */
 let decisionState = {};
+/** 最新一次生成的决策对象（供自动交易等内部消费者读取） */
+let lastDecisionPush = null;
 let saveQueue = Promise.resolve();
 let decisionSaveQueue = Promise.resolve();
 
@@ -1146,6 +1148,7 @@ export async function runSmartTrendPush({ force = false } = {}) {
       reboundHighlightPct: deps.reboundHighlightPct ?? 15,
       heldSymbols,
     });
+    lastDecisionPush = decisionPush;
     queueSaveDecisionState(decisionPush.nextState);
 
     const totalCoins = gainerRows.length + loserRows.length + pinnedRows.length + rightSideRows.length + volumeRows.length;
@@ -1263,6 +1266,11 @@ export async function runSmartTrendPush({ force = false } = {}) {
   } finally {
     running = false;
   }
+}
+
+/** 获取最新一次生成的决策对象（供 auto-trader 读取；可能为 null） */
+export function getLatestDecisionPush() {
+  return lastDecisionPush;
 }
 
 export function startSmartTrendScheduler() {
