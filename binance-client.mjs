@@ -181,7 +181,14 @@ export async function placeLimitOrder({ symbol, side, positionSide, quantity, pr
     _logger.log?.(`  [DRY-RUN] place ${side} LIMIT ${symbol} qty=${quantity} price=${price}`);
     return { dryRun: true, ...params, orderId: `dry-${Date.now()}` };
   }
-  return request('POST', path, params, { signed: true });
+  const resp = await request('POST', path, params, { signed: true });
+  return normalizeOrderId(resp);
+}
+
+// orderId 统一转整数字符串：避免 JSON number 经 sql.js 存储变成 "2471958212.0" 导致撤单/查单 -1102
+function normalizeOrderId(resp) {
+  if (resp && resp.orderId != null) resp.orderId = String(Math.trunc(Number(resp.orderId)));
+  return resp;
 }
 
 /** 下市价单（平仓用，保证立即成交） */
@@ -200,7 +207,8 @@ export async function placeMarketOrder({ symbol, side, positionSide, quantity, r
     _logger.log?.(`  [DRY-RUN] place ${side} MARKET ${symbol} qty=${quantity}`);
     return { dryRun: true, ...params, orderId: `dry-${Date.now()}` };
   }
-  return request('POST', path, params, { signed: true });
+  const resp = await request('POST', path, params, { signed: true });
+  return normalizeOrderId(resp);
 }
 
 /** 查询持仓模式（合约：dualSidePosition=true 为双向持仓 Hedge Mode） */

@@ -250,11 +250,17 @@ function isValidSignal(item) {
 // ==================== 维护：撤单 ====================
 
 /** 从交易所同步单个挂单的成交状态；已成交则开仓并返回 true */
+// 历史脏数据兼容：sql.js 曾把 number 型 orderId 存成 "2471958212.0"，币安拒收该格式
+function cleanBinanceId(id) {
+  const s = String(id ?? '').trim();
+  return /^\d+\.0+$/.test(s) ? s.replace(/\.0+$/, '') : s;
+}
+
 async function syncOrderFill(order) {
   if (!order.binance_id || isDryRun()) return false;
   let ex;
   try {
-    ex = await getOrder(order.symbol, order.binance_id);
+    ex = await getOrder(order.symbol, cleanBinanceId(order.binance_id));
   } catch (e) {
     logger.warn?.(`  ⚠ 查询订单状态失败 ${order.symbol}: ${e.message}`);
     return false;
@@ -323,7 +329,7 @@ async function cancelLocalOrder(order, reason) {
   logger.log?.(`  ❌ 撤单 ${order.symbol} id=${order.id} reason=${reason} price=${order.price}`);
   if (order.binance_id && !isDryRun()) {
     try {
-      await cancelOrder(order.symbol, order.binance_id);
+      await cancelOrder(order.symbol, cleanBinanceId(order.binance_id));
     } catch (e) {
       // 竞态保护：撤单失败可能是挂单刚成交，先确认状态再决定是否标 cancelled
       logger.warn?.(`  ⚠ 交易所撤单失败 ${order.symbol}: ${e.message}`);
@@ -462,7 +468,7 @@ async function placeNewOrders(candidates, now) {
         orderType: 'LIMIT',
         price: entryPrice,
         qty,
-        binanceId: result?.orderId || null,
+        binanceId: result?.orderId != null ? String(result.orderId) : null,
         emaUsed: ema,
         pullbackPct: pullback,
         status: 'pending',
