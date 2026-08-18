@@ -166,7 +166,7 @@ export async function getOrder(symbol, orderId) {
 }
 
 /** 下限价单 */
-export async function placeLimitOrder({ symbol, side, quantity, price, timeInForce = 'GTC' }) {
+export async function placeLimitOrder({ symbol, side, positionSide, quantity, price, timeInForce = "GTC" }) {
   const path = _market === 'futures' ? '/fapi/v1/order' : '/api/v3/order';
   const params = {
     symbol: symbol.toUpperCase(),
@@ -175,6 +175,7 @@ export async function placeLimitOrder({ symbol, side, quantity, price, timeInFor
     quantity,
     price,
     timeInForce,
+    ...(positionSide && { positionSide }),
   };
   if (_dryRun) {
     _logger.log?.(`  [DRY-RUN] place ${side} LIMIT ${symbol} qty=${quantity} price=${price}`);
