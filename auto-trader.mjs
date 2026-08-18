@@ -11,7 +11,7 @@ import { emaLast, closesOf } from './ema.mjs';
 import { getNextHourShanghai } from './smart-trend-monitor.mjs';
 import {
   configureBinanceClient, getKlines, getMarkPrice,
-  placeLimitOrder, cancelOrder, getOpenOrders, isDryRun,
+  placeLimitOrder, placeMarketOrder, cancelOrder, getOrder, getPositionMode, isDryRun,
 } from './binance-client.mjs';
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
@@ -47,6 +47,8 @@ let cfg = { ...DEFAULTS };
 let tickTimer = null;
 let logger = console;
 let running = false;
+/** 双向持仓模式（Hedge Mode）标记，启动时探测；null=未知（仅影响 LIVE 合约下单参数） */
+let dualSidePosition = null;
 /** @type {() => object|null} 由外部注入的最新决策对象 */
 let getDecisionGetter = null;
 
@@ -95,6 +97,18 @@ export async function startAutoTrader(opts = {}) {
 
   const mode = cfg.dryRun ? '🧪 DRY-RUN（只记录不下单）' : '🔴 LIVE';
   logger.log?.(`  🤖 自动交易启动: ${mode} · ${cfg.market} · 每 ${cfg.tickEveryMin} 分钟 · 最多 ${cfg.maxPositions} 仓 · 单笔 ${cfg.orderUsdt}U · 回踩 -${cfg.pullbackLowPct}% ~ -${cfg.pullbackHighPct}%`);
+
+  // LIVE 合约模式：探测持仓模式（双向持仓需 positionSide，否则下单报 -4061）
+  if (!cfg.dryRun && cfg.market === 'futures') {
+    try {
+      const m = await getPositionMode();
+      dualSidePosition = !!m?.dualSidePosition;
+      logger.log?.(`  🔍 持仓模式: ${dualSidePosition ? '双向持仓(Hedge Mode)' : '单向持仓(One-way)'}`);
+    } catch (e) {
+      logger.warn?.(`  ⚠ 持仓模式探测失败（默认按双向处理）: ${e.message}`);
+      dualSidePosition = true;
+    }
+  }
 
   scheduleTick();
 }
@@ -205,12 +219,55 @@ function isValidSignal(item) {
 
 // ==================== 维护：撤单 ====================
 
+/** 从交易所同步单个挂单的成交状态；已成交则开仓并返回 true */
+async function syncOrderFill(order) {
+  if (!order.binance_id || isDryRun()) return false;
+  let ex;
+  try {
+    ex = await getOrder(order.symbol, order.binance_id);
+  } catch (e) {
+    logger.warn?.(`  ⚠ 查询订单状态失败 ${order.symbol}: ${e.message}`);
+    return false;
+  }
+  if (ex?.status === 'FILLED') {
+    const fillPrice = parseFloat(ex.avgPrice) || order.price;
+    openPositionFromOrder(order, fillPrice);
+    logger.log?.(`  ✅ 检测到成交 ${order.symbol} id=${order.id} price=${fillPrice}`);
+    return true;
+  }
+  if (ex?.status === 'CANCELED' || ex?.status === 'EXPIRED' || ex?.status === 'REJECTED') {
+    // 交易所侧已不在（手动撤单/资金费结算等），同步本地状态避免永远 pending
+    updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
+    logAutoTrade(order.symbol, 'sync_cancel', { orderId: order.id, exStatus: ex.status });
+    return false;
+  }
+  return false;
+}
+
+function openPositionFromOrder(order, fillPrice) {
+  insertAutoPosition({
+    id: randomUUID(),
+    symbol: order.symbol,
+    entryPrice: fillPrice,
+    qty: order.qty,
+    entryOrderId: order.id,
+    tpPrice: fillPrice * (1 + cfg.tpPct / 100),
+    slPrice: fillPrice * (1 - cfg.slPct / 100),
+    status: 'open',
+    openedAt: Date.now(),
+  });
+  updateAutoOrder(order.id, { status: 'filled', filledAt: Date.now() });
+  logAutoTrade(order.symbol, 'fill', { orderId: order.id, price: fillPrice, qty: order.qty });
+}
+
 async function maintainPendingOrders(candidates, now) {
   const active = queryActiveAutoOrders();
   if (!active.length) return;
   const candSet = new Set(candidates.map(c => c.symbol?.toUpperCase()));
 
   for (const order of active) {
+    // 先同步成交状态（避免对已成交订单误撤单/重复挂单）
+    if (await syncOrderFill(order)) continue;
     // TTL 到期
     if (now - order.created_at > (order.ttl_min || cfg.orderTtlMin) * 60_000) {
       await cancelLocalOrder(order, 'ttl_expired');
@@ -234,12 +291,17 @@ async function maintainPendingOrders(candidates, now) {
 
 async function cancelLocalOrder(order, reason) {
   logger.log?.(`  ❌ 撤单 ${order.symbol} id=${order.id} reason=${reason} price=${order.price}`);
-  try {
-    if (order.binance_id && !isDryRun()) {
+  if (order.binance_id && !isDryRun()) {
+    try {
       await cancelOrder(order.symbol, order.binance_id);
+    } catch (e) {
+      // 竞态保护：撤单失败可能是挂单刚成交，先确认状态再决定是否标 cancelled
+      logger.warn?.(`  ⚠ 交易所撤单失败 ${order.symbol}: ${e.message}`);
+      if (await syncOrderFill(order)) {
+        logger.log?.(`  ℹ ${order.symbol} 撤单前已成交，转为持仓管理`);
+        return;
+      }
     }
-  } catch (e) {
-    logger.warn?.(`  ⚠ 交易所撤单失败 ${order.symbol}: ${e.message}`);
   }
   updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
   logAutoTrade(order.symbol, 'cancel', { orderId: order.id, reason, binanceId: order.binance_id });
@@ -281,17 +343,21 @@ async function closeLocalPosition(pos, reason, curPrice) {
   logger.log?.(`  📤 平仓 ${pos.symbol} reason=${reason} entry=${pos.entry_price} cur=${curPrice?.toFixed(6)}`);
   try {
     if (!isDryRun()) {
-      await placeLimitOrder({
+      // 市价单保证立即离场；双向持仓需 positionSide=LONG，单向用 reduceOnly 防反向开仓
+      await placeMarketOrder({
         symbol: pos.symbol,
         side: 'SELL',
         quantity: pos.qty,
-        price: curPrice,
+        ...(dualSidePosition ? { positionSide: 'LONG' } : { reduceOnly: true }),
       });
     } else {
-      logger.log?.(`  [DRY-RUN] SELL ${pos.symbol} qty=${pos.qty} price=${curPrice}`);
+      logger.log?.(`  [DRY-RUN] SELL MARKET ${pos.symbol} qty=${pos.qty}`);
     }
   } catch (e) {
-    logger.warn?.(`  ⚠ 平仓下单失败 ${pos.symbol}: ${e.message}`);
+    // 平仓失败不标 closed，保留持仓下轮 tick 重试（避免孤儿仓失忆）
+    logger.warn?.(`  ⚠ 平仓失败 ${pos.symbol}（保留持仓下轮重试）: ${e.message}`);
+    logAutoTrade(pos.symbol, 'close_fail', { posId: pos.id, reason, error: e.message });
+    return;
   }
   updateAutoPosition(pos.id, {
     status: 'closed',
@@ -348,6 +414,8 @@ async function placeNewOrders(candidates, now) {
         side: 'BUY',
         quantity: qty,
         price: entryPrice,
+        // 双向持仓模式必须指定 positionSide，否则报 -4061
+        ...(dualSidePosition ? { positionSide: 'LONG' } : {}),
       });
 
       const orderId = randomUUID();
@@ -373,21 +441,12 @@ async function placeNewOrders(candidates, now) {
         score: item.score, status: item.status,
       });
 
-      // 预写入持仓占位（真正成交由下一 tick 检测；dry-run 下直接记为 open）
+      // dry-run 下直接模拟成交开仓；LIVE 下保持 pending，由后续 tick 的 syncOrderFill 检测真实成交
       if (isDryRun()) {
-        insertAutoPosition({
-          id: randomUUID(),
-          symbol: sym,
+        openPositionFromOrder(
+          { id: orderId, symbol: sym, qty, price: entryPrice },
           entryPrice,
-          qty,
-          entryOrderId: orderId,
-          tpPrice: entryPrice * (1 + cfg.tpPct / 100),
-          slPrice: entryPrice * (1 - cfg.slPct / 100),
-          status: 'open',
-          openedAt: Date.now(),
-        });
-        updateAutoOrder(orderId, { status: 'filled', filledAt: Date.now() });
-        logAutoTrade(sym, 'fill_sim', { orderId, price: entryPrice, qty });
+        );
       }
 
       existing.add(sym);

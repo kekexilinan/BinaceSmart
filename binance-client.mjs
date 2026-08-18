@@ -184,6 +184,31 @@ export async function placeLimitOrder({ symbol, side, positionSide, quantity, pr
   return request('POST', path, params, { signed: true });
 }
 
+/** 下市价单（平仓用，保证立即成交） */
+export async function placeMarketOrder({ symbol, side, positionSide, quantity, reduceOnly = false }) {
+  const path = _market === 'futures' ? '/fapi/v1/order' : '/api/v3/order';
+  const params = {
+    symbol: symbol.toUpperCase(),
+    side: side.toUpperCase(),
+    type: 'MARKET',
+    quantity,
+    ...(positionSide && { positionSide }),
+    // reduceOnly 仅单向持仓模式可用；双向模式靠 positionSide 区分
+    ...(!positionSide && reduceOnly && { reduceOnly: 'true' }),
+  };
+  if (_dryRun) {
+    _logger.log?.(`  [DRY-RUN] place ${side} MARKET ${symbol} qty=${quantity}`);
+    return { dryRun: true, ...params, orderId: `dry-${Date.now()}` };
+  }
+  return request('POST', path, params, { signed: true });
+}
+
+/** 查询持仓模式（合约：dualSidePosition=true 为双向持仓 Hedge Mode） */
+export async function getPositionMode() {
+  if (_market !== 'futures') return { dualSidePosition: false };
+  return request('GET', '/fapi/v1/positionSide/dual', {}, { signed: true });
+}
+
 /** 撤单 */
 export async function cancelOrder(symbol, orderId) {
   const path = _market === 'futures' ? '/fapi/v1/order' : '/api/v3/order';
