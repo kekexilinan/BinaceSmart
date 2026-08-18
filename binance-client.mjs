@@ -232,3 +232,22 @@ export async function getExchangeInfo() {
   const path = _market === 'futures' ? '/fapi/v1/exchangeInfo' : '/api/v3/exchangeInfo';
   return request('GET', path);
 }
+
+/** 账户余额（合约 v2 返回全量资产，取 USDT） */
+export async function getBalance() {
+  if (_dryRun) return { dryRun: true, balances: [{ asset: 'USDT', balance: '0', availableBalance: '0' }] };
+  if (_market === 'futures') {
+    const list = await request('GET', '/fapi/v2/balance', {}, { signed: true });
+    return { balances: Array.isArray(list) ? list : [] };
+  }
+  const data = await request('GET', '/api/v3/account', {}, { signed: true });
+  return { balances: data?.balances || [] };
+}
+
+/** 交易所真实持仓（合约，用于与本地 DB 对账） */
+export async function getAccountPositions() {
+  if (_dryRun) return [];
+  if (_market !== 'futures') return [];
+  const list = await request('GET', '/fapi/v2/positionRisk', {}, { signed: true });
+  return (Array.isArray(list) ? list : []).filter(p => Number(p.positionAmt) !== 0);
+}

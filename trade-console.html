@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>交易管理台 · BinanceSmart</title>
+<style>
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background: #0d1117; color: #e6edf3; padding: 24px; min-height: 100vh;
+}
+.container { max-width: 1280px; margin: 0 auto; }
+
+.header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; flex-wrap: wrap; gap: 10px; }
+.header h1 { font-size: 22px; font-weight: 600; }
+.header .sub { color: #8b949e; font-size: 12px; margin-top: 4px; }
+.header-right { display: flex; gap: 8px; align-items: center; }
+
+.stats-grid { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 20px; }
+.stat-card { background: #161b22; border: 1px solid #30363d; border-radius: 8px; padding: 14px; text-align: center; }
+.stat-value { font-size: 20px; font-weight: 700; margin-bottom: 2px; }
+.stat-label { font-size: 11px; color: #8b949e; }
+.stat-success .stat-value { color: #3fb950; }
+.stat-danger .stat-value { color: #f85149; }
+.stat-info .stat-value { color: #58a6ff; }
+.stat-warning .stat-value { color: #d29922; }
+
+.tabs { display: flex; gap: 2px; margin-bottom: 12px; background: #161b22; border-radius: 8px; padding: 3px; border: 1px solid #30363d; width: fit-content; }
+.tab { padding: 6px 14px; border-radius: 6px; font-size: 12px; cursor: pointer; color: #8b949e; transition: all 0.2s; }
+.tab.active { background: #21262d; color: #e6edf3; font-weight: 600; }
+.tab:hover:not(.active) { color: #e6edf3; }
+.tab .count { font-size: 10px; background: #30363d; padding: 1px 5px; border-radius: 8px; margin-left: 4px; }
+
+.table-wrap { background: #161b22; border: 1px solid #30363d; border-radius: 8px; overflow: hidden; }
+table { width: 100%; border-collapse: collapse; font-size: 12px; }
+th { background: #1c2128; padding: 8px 10px; text-align: left; font-weight: 600; color: #8b949e; font-size: 10px; text-transform: uppercase; }
+td { padding: 8px 10px; border-top: 1px solid #21262d; }
+tr:hover td { background: #1c2128; }
+.empty { padding: 32px; text-align: center; color: #8b949e; font-size: 12px; }
+
+.pill { padding: 2px 8px; border-radius: 10px; font-size: 10px; font-weight: 600; display: inline-block; }
+.pill-live { background: #3d1515; color: #f85149; }
+.pill-dry { background: #1c2128; color: #8b949e; }
+.pill-long { background: #1b4332; color: #3fb950; }
+.pill-pending { background: #2d2200; color: #d29922; }
+.pill-filled { background: #1b4332; color: #3fb950; }
+.pill-cancelled { background: #1c2128; color: #8b949e; }
+.pill-manual { background: #0c2d6b; color: #58a6ff; }
+.pill-auto { background: #1c2128; color: #8b949e; }
+.positive { color: #3fb950; } .negative { color: #f85149; } .muted { color: #8b949e; }
+
+.btn { border: 1px solid #30363d; background: #21262d; color: #e6edf3; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
+.btn:hover { background: #30363d; }
+.btn-danger { background: #3d1515; border-color: #f8514955; color: #f85149; }
+.btn-danger:hover { background: #56201d; }
+.btn-warn { background: #2d2200; border-color: #d2992255; color: #d29922; }
+.btn-warn:hover { background: #3d2f06; }
+.btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+.banner { display: none; padding: 10px 14px; border-radius: 8px; font-size: 12px; margin-bottom: 14px; border: 1px solid; }
+.banner.error { display: block; background: #3d151533; border-color: #f85149; color: #f85149; }
+.banner.info { display: block; background: #0c2d6b33; border-color: #58a6ff; color: #58a6ff; }
+
+.mono { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: 11px; }
+.detail-cell { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.footer { margin-top: 16px; font-size: 11px; color: #8b949e; display: flex; justify-content: space-between; }
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="header">
+    <div>
+      <h1>🤖 交易管理台</h1>
+      <div class="sub">自动交易模块 · 挂单 / 持仓 / 操作审计 · 每 10s 自动刷新</div>
+    </div>
+    <div class="header-right">
+      <span id="modePill" class="pill pill-dry">加载中</span>
+      <button class="btn" onclick="setToken()">设置 Token</button>
+      <button class="btn btn-danger" onclick="panicCancel()">🛑 一键撤单</button>
+    </div>
+  </div>
+
+  <div id="banner" class="banner"></div>
+
+  <div class="stats-grid">
+    <div class="stat-card"><div class="stat-value" id="stBalance">--</div><div class="stat-label">USDT 余额</div></div>
+    <div class="stat-card"><div class="stat-value" id="stAvailable">--</div><div class="stat-label">可用余额</div></div>
+    <div class="stat-card stat-warning"><div class="stat-value" id="stOrders">--</div><div class="stat-label">活动挂单</div></div>
+    <div class="stat-card stat-info"><div class="stat-value" id="stPositions">--</div><div class="stat-label">持仓数</div></div>
+    <div class="stat-card"><div class="stat-value" id="stSlot">--</div><div class="stat-label">仓位占用</div></div>
+    <div class="stat-card"><div class="stat-value" id="stExPos">--</div><div class="stat-label">交易所真实持仓</div></div>
+  </div>
+
+  <div class="tabs">
+    <div class="tab active" data-tab="orders" onclick="switchTab('orders')">挂单 <span class="count" id="cntOrders">0</span></div>
+    <div class="tab" data-tab="positions" onclick="switchTab('positions')">持仓 <span class="count" id="cntPositions">0</span></div>
+    <div class="tab" data-tab="logs" onclick="switchTab('logs')">操作日志</div>
+  </div>
+
+  <div id="tab-orders">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>币种</th><th>方向</th><th>挂单价</th><th>数量</th><th>回踩%</th><th>TTL 剩余</th><th>下单时间</th><th>评分</th><th>操作</th>
+        </tr></thead>
+        <tbody id="ordersBody"></tbody>
+      </table>
+      <div class="empty" id="ordersEmpty" style="display:none">暂无活动挂单</div>
+    </div>
+  </div>
+
+  <div id="tab-positions" style="display:none">
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>币种</th><th>开仓价</th><th>数量</th><th>名义值</th><th>TP 价</th><th>SL 价</th><th>开仓时间</th><th>操作</th>
+        </tr></thead>
+        <tbody id="positionsBody"></tbody>
+      </table>
+      <div class="empty" id="positionsEmpty" style="display:none">暂无持仓</div>
+    </div>
+  </div>
+
+  <div id="tab-logs" style="display:none">
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th>时间</th><th>币种</th><th>动作</th><th>来源</th><th>详情</th></tr></thead>
+        <tbody id="logsBody"></tbody>
+      </table>
+      <div class="empty" id="logsEmpty" style="display:none">暂无日志</div>
+    </div>
+  </div>
+
+  <div class="footer">
+    <span id="engineInfo"></span>
+    <span id="lastUpdate"></span>
+  </div>
+</div>
+
+<script>
+const $ = id => document.getElementById(id);
+let allOrders = [], openPositions = [];
+
+function getToken() {
+  const u = new URL(location.href);
+  if (u.searchParams.get('token')) { localStorage.setItem('tradeToken', u.searchParams.get('token')); }
+  return localStorage.getItem('tradeToken') || '';
+}
+function setToken() {
+  const t = prompt('输入管理 token（保存在浏览器本地）:', localStorage.getItem('tradeToken') || '');
+  if (t !== null) { localStorage.setItem('tradeToken', t.trim()); refreshAll(); }
+}
+function banner(type, msg) {
+  const el = $('banner');
+  el.className = 'banner ' + type;
+  el.textContent = msg;
+  if (type === 'info') setTimeout(() => { el.className = 'banner'; }, 8000);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: { 'Content-Type': 'application/json', 'x-trade-token': getToken(), ...(opts.headers || {}) },
+  });
+  return res.json();
+}
+async function post(path, data) {
+  const res = await fetch(path, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'x-trade-token': getToken() },
+    body: JSON.stringify(data),
+  });
+  return res.json();
+}
+
+function fmtTime(ts) {
+  if (!ts) return '--';
+  const d = new Date(ts);
+  const p = n => String(n).padStart(2, '0');
+  return `${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function fmtNum(v, digits = 4) {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '--';
+  return n >= 1000 ? n.toFixed(2) : +n.toFixed(digits) + '';
+}
+
+async function refreshAll() {
+  try {
+    const [status, orders, positions, logs] = await Promise.all([
+      api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'),
+    ]);
+    renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs);
+    $('lastUpdate').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
+  } catch (e) {
+    banner('error', '刷新失败: ' + e.message);
+  }
+}
+
+function renderStatus(s) {
+  if (s.error) { banner('error', '状态加载失败: ' + s.error); return; }
+  const pill = $('modePill');
+  if (s.dryRun) { pill.className = 'pill pill-dry'; pill.textContent = '🧪 DRY-RUN'; }
+  else { pill.className = 'pill pill-live'; pill.textContent = '🔴 LIVE 实盘'; }
+  $('stBalance').textContent = s.balance ? fmtNum(s.balance.total, 2) + ' U' : (s.dryRun ? '模拟' : '--');
+  $('stAvailable').textContent = s.balance ? fmtNum(s.balance.available, 2) + ' U' : (s.dryRun ? '模拟' : '--');
+  $('stOrders').textContent = s.activeOrders ?? '--';
+  $('stPositions').textContent = s.openPositions ?? '--';
+  $('stSlot').textContent = `${s.openPositions ?? 0}/${s.maxPositions ?? '-'}`;
+  $('stExPos').textContent = (s.exchangePositions || []).length;
+  $('engineInfo').textContent =
+    `引擎: ${s.running ? '运行中' : '未运行'} · 单笔 ${s.orderUsdt}U · 回踩 -${s.pullback?.low}%~-${s.pullback?.high}% · TTL ${s.ttlMin}分 · TP +${s.tpPct}% / SL -${s.slPct}%`;
+  // 交易所与本地持仓数不一致提醒（对账）
+  const exLong = (s.exchangePositions || []).filter(p => p.positionSide !== 'SHORT').length;
+  if (!s.dryRun && exLong !== (s.openPositions ?? 0)) {
+    banner('error', `⚠ 对账不一致：交易所多头持仓 ${exLong} 个 vs 本地记录 ${s.openPositions} 个，请人工核查！`);
+  }
+}
+
+function renderOrders(orders) {
+  allOrders = Array.isArray(orders) ? orders.filter(o => o.status === 'pending') : [];
+  $('cntOrders').textContent = allOrders.length;
+  const body = $('ordersBody');
+  body.innerHTML = '';
+  $('ordersEmpty').style.display = allOrders.length ? 'none' : 'block';
+  const now = Date.now();
+  for (const o of allOrders) {
+    let meta = {};
+    try { meta = o.meta_json ? JSON.parse(o.meta_json) : {}; } catch {}
+    const ttlLeft = Math.max(0, (o.ttl_min || 180) * 60000 - (now - o.created_at));
+    const ttlMin = Math.floor(ttlLeft / 60000);
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${o.symbol?.replace('USDT', '')}</b><span class="muted">/USDT</span></td>
+      <td><span class="pill pill-long">LONG</span></td>
+      <td class="mono">${fmtNum(o.price, 6)}</td>
+      <td>${fmtNum(o.qty, 2)}</td>
+      <td class="muted">${o.pullback_pct != null ? '-' + Number(o.pullback_pct).toFixed(1) + '%' : '--'}</td>
+      <td class="${ttlMin < 30 ? 'negative' : 'muted'}">${ttlMin} 分钟</td>
+      <td class="muted">${fmtTime(o.created_at)}</td>
+      <td class="muted">${meta.score ?? '--'}</td>
+      <td><button class="btn btn-warn" onclick="cancelOrder('${o.id}', '${o.symbol}', ${o.price})">撤单</button></td>`;
+    body.appendChild(tr);
+  }
+}
+
+function renderPositions(positions) {
+  openPositions = Array.isArray(positions) ? positions : [];
+  $('cntPositions').textContent = openPositions.length;
+  const body = $('positionsBody');
+  body.innerHTML = '';
+  $('positionsEmpty').style.display = openPositions.length ? 'none' : 'block';
+  for (const p of openPositions) {
+    const notional = p.entry_price * p.qty;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><b>${p.symbol?.replace('USDT', '')}</b><span class="muted">/USDT</span></td>
+      <td class="mono">${fmtNum(p.entry_price, 6)}</td>
+      <td>${fmtNum(p.qty, 2)}</td>
+      <td class="muted">${fmtNum(notional, 2)} U</td>
+      <td class="positive mono">${p.tp_price ? fmtNum(p.tp_price, 6) : '--'}</td>
+      <td class="negative mono">${p.sl_price ? fmtNum(p.sl_price, 6) : '--'}</td>
+      <td class="muted">${fmtTime(p.opened_at)}</td>
+      <td><button class="btn btn-danger" onclick="closePosition('${p.id}', '${p.symbol}', ${p.qty}, ${notional})">市价平仓</button></td>`;
+    body.appendChild(tr);
+  }
+}
+
+function renderLogs(logs) {
+  const list = Array.isArray(logs) ? logs : [];
+  const body = $('logsBody');
+  body.innerHTML = '';
+  $('logsEmpty').style.display = list.length ? 'none' : 'block';
+  const ACTION_LABEL = { place: '挂单', cancel: '撤单', fill: '成交', open: '开仓', close: '平仓', close_fail: '平仓失败', close_manual: '手动平仓', panic_cancel: '一键撤单' };
+  for (const l of list) {
+    let detail = l.detail || '';
+    let source = 'auto';
+    try {
+      const d = JSON.parse(detail);
+      if (d.source === 'manual') source = 'manual';
+      detail = Object.entries(d).filter(([k]) => k !== 'source').map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+    } catch {}
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td class="muted">${fmtTime(l.ts)}</td>
+      <td>${l.symbol ? l.symbol.replace('USDT', '') : '--'}</td>
+      <td>${ACTION_LABEL[l.action] || l.action}</td>
+      <td><span class="pill pill-${source}">${source === 'manual' ? '手动' : '自动'}</span></td>
+      <td class="mono detail-cell" title="${detail.replace(/"/g, '&quot;')}">${detail}</td>`;
+    body.appendChild(tr);
+  }
+}
+
+function switchTab(name) {
+  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  ['orders', 'positions', 'logs'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+}
+
+async function cancelOrder(id, symbol, price) {
+  if (!confirm(`确认撤销 ${symbol} 挂单（价格 ${price}）？`)) return;
+  const r = await post('/api/trade/orders/cancel', { orderId: id });
+  if (r.ok) banner('info', `✅ ${r.msg || symbol + ' 已撤单'}`);
+  else banner('error', `❌ 撤单失败: ${r.reason || r.error}`);
+  refreshAll();
+}
+
+async function closePosition(id, symbol, qty, notional) {
+  if (!confirm(`确认市价平仓 ${symbol}？\n数量: ${qty} · 名义值约 ${notional.toFixed(2)} U`)) return;
+  const r = await post('/api/trade/positions/close', { posId: id });
+  if (r.ok) banner('info', `✅ ${symbol} 已平仓，退出价 ${r.exitPrice}，盈亏 ${r.pnlPct}%`);
+  else banner('error', `❌ 平仓失败: ${r.reason || r.error}`);
+  refreshAll();
+}
+
+async function panicCancel() {
+  const n = allOrders.length;
+  if (!n) { banner('info', '当前没有活动挂单'); return; }
+  if (!confirm(`🛑 确认一键撤销全部 ${n} 个挂单？`)) return;
+  const r = await post('/api/trade/panic', {});
+  if (r.ok) banner('info', `✅ 一键撤单完成：成功 ${r.cancelled}，失败 ${r.failed}`);
+  else banner('error', `❌ 一键撤单失败: ${r.error}`);
+  refreshAll();
+}
+
+getToken();
+refreshAll();
+setInterval(refreshAll, 10000);
+</script>
+</body>
+</html>

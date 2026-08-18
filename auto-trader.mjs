@@ -12,12 +12,12 @@ import { getNextHourShanghai } from './smart-trend-monitor.mjs';
 import {
   configureBinanceClient, getKlines, getMarkPrice,
   placeLimitOrder, placeMarketOrder, cancelOrder, getOrder, getPositionMode, isDryRun,
-  getExchangeInfo,
+  getExchangeInfo, getBalance, getAccountPositions,
 } from './binance-client.mjs';
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
   insertAutoPosition, updateAutoPosition, queryOpenPositions,
-  logAutoTrade, queryLatestSnapshot, queryLatestDecision,
+  logAutoTrade, queryLatestSnapshot, queryLatestDecision, queryAutoTradeLogs,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -590,4 +590,79 @@ export async function runTickNow() {
   }
 }
 
-export { queryActiveAutoOrders as getActiveOrders, queryOpenPositions as getOpenPositions };
+export { queryActiveAutoOrders as getActiveOrders, queryOpenPositions as getOpenPositions, queryAutoOrders as getAllOrders, queryAutoTradeLogs as getTradeLogs };
+
+// ==================== 管理台操作 API（供 trade-console 页面） ====================
+
+/** 手动撤单：撤后回查交易所真实状态，已成交则转持仓管理 */
+export async function apiCancelOrder(orderId) {
+  const order = queryActiveAutoOrders().find(o => o.id === orderId);
+  if (!order) return { ok: false, reason: '未找到该活动挂单（可能已成交/已撤销）' };
+  if (order.binance_id && !isDryRun()) {
+    try {
+      await cancelOrder(order.symbol, cleanBinanceId(order.binance_id));
+    } catch (e) {
+      if (await syncOrderFill(order)) {
+        return { ok: true, result: 'filled', msg: `${order.symbol} 撤单前已成交，已转为持仓管理` };
+      }
+      return { ok: false, reason: `交易所撤单失败: ${e.message}` };
+    }
+    // 回查确认（防孤儿单）
+    try {
+      const ex = await getOrder(order.symbol, cleanBinanceId(order.binance_id));
+      if (ex?.status === 'FILLED') {
+        openPositionFromOrder(order, parseFloat(ex.avgPrice) || order.price);
+        return { ok: true, result: 'filled', msg: `${order.symbol} 撤单时刚成交，已转为持仓管理` };
+      }
+    } catch { /* 回查失败不阻断，撤单已成功 */ }
+  }
+  updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
+  logAutoTrade(order.symbol, 'cancel', { orderId: order.id, reason: 'manual', source: 'manual', binanceId: order.binance_id });
+  logger.log?.(`  🖐 手动撤单 ${order.symbol} id=${order.id}`);
+  return { ok: true, result: 'cancelled' };
+}
+
+/** 手动市价平仓 */
+export async function apiClosePosition(posId) {
+  const pos = queryOpenPositions().find(p => p.id === posId);
+  if (!pos) return { ok: false, reason: '未找到该持仓' };
+  let curPrice;
+  try {
+    const mp = await getMarkPrice(pos.symbol);
+    curPrice = mp.lastPrice;
+  } catch (e) {
+    return { ok: false, reason: `获取现价失败: ${e.message}` };
+  }
+  await closeLocalPosition(pos, 'manual', curPrice);
+  const stillOpen = queryOpenPositions().some(p => p.id === posId);
+  if (stillOpen) return { ok: false, reason: '平仓失败（交易所拒单/超时），已保留持仓下轮重试' };
+  logAutoTrade(pos.symbol, 'close_manual', { posId, source: 'manual', entry: pos.entry_price, exit: curPrice });
+  return { ok: true, exitPrice: curPrice, pnlPct: +(((curPrice - pos.entry_price) / pos.entry_price) * 100).toFixed(2) };
+}
+
+/** 一键撤单（Kill Switch）：撤销全部活动挂单 */
+export async function apiPanicCancel() {
+  const active = queryActiveAutoOrders();
+  let ok = 0, fail = 0;
+  for (const order of active) {
+    const r = await apiCancelOrder(order.id);
+    r.ok ? ok++ : fail++;
+  }
+  logAutoTrade(null, 'panic_cancel', { source: 'manual', total: active.length, ok, fail });
+  return { ok: true, total: active.length, cancelled: ok, failed: fail };
+}
+
+/** 管理台全局状态：引擎状态 + 账户余额 + 挂单/持仓实时价 */
+export async function apiConsoleStatus() {
+  const status = getAutoTraderStatus();
+  let balance = null, exchangePositions = [];
+  if (!isDryRun()) {
+    try {
+      const b = await getBalance();
+      const usdt = (b.balances || []).find(x => x.asset === 'USDT');
+      balance = usdt ? { total: +usdt.balance, available: +(usdt.availableBalance ?? usdt.balance) } : null;
+    } catch (e) { logger.warn?.(`  ⚠ 查余额失败: ${e.message}`); }
+    try { exchangePositions = await getAccountPositions(); } catch (e) { logger.warn?.(`  ⚠ 查交易所持仓失败: ${e.message}`); }
+  }
+  return { ...status, balance, exchangePositions };
+}

@@ -27,7 +27,7 @@ import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHea
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
-import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow } from './auto-trader.mjs';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -2200,6 +2200,68 @@ async function getFuturesSymbols() {
   if (url.pathname === '/api/auto-trader/tick' && req.method === 'OPTIONS') {
     res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'POST', 'Access-Control-Allow-Headers': 'Content-Type' });
     res.end();
+    return;
+  }
+
+  // === 交易管理台 API（trade-console） ===
+  // 写操作需 TRADE_CONSOLE_TOKEN 校验（header x-trade-token 或 body.token），防公网误触
+  const TRADE_TOKEN = process.env.TRADE_CONSOLE_TOKEN || '';
+  const tradeHeaders = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-token' };
+  if (url.pathname.startsWith('/api/trade/') && req.method === 'OPTIONS') {
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-token' });
+    res.end();
+    return;
+  }
+  if (url.pathname === '/api/trade/status') {
+    apiConsoleStatus().then(s => { res.writeHead(200, tradeHeaders); res.end(JSON.stringify(s)); })
+      .catch(e => { res.writeHead(500, tradeHeaders); res.end(JSON.stringify({ error: e.message })); });
+    return;
+  }
+  if (url.pathname === '/api/trade/orders') {
+    const status = url.searchParams.get('status') || undefined;
+    res.writeHead(200, tradeHeaders);
+    res.end(JSON.stringify(getAllOrders({ status, limit: 500 })));
+    return;
+  }
+  if (url.pathname === '/api/trade/positions') {
+    res.writeHead(200, tradeHeaders);
+    res.end(JSON.stringify(getOpenPositions()));
+    return;
+  }
+  if (url.pathname === '/api/trade/logs') {
+    res.writeHead(200, tradeHeaders);
+    res.end(JSON.stringify(getTradeLogs({ limit: Number(url.searchParams.get('limit') || 300) })));
+    return;
+  }
+  if (url.pathname.startsWith('/api/trade/') && req.method === 'POST') {
+    let body = '';
+    req.on('data', c => body += c);
+    req.on('end', async () => {
+      try {
+        const data = body ? JSON.parse(body) : {};
+        const token = req.headers['x-trade-token'] || data.token || '';
+        if (!TRADE_TOKEN) {
+          res.writeHead(403, tradeHeaders);
+          res.end(JSON.stringify({ ok: false, error: '服务端未配置 TRADE_CONSOLE_TOKEN，写操作已禁用' }));
+          return;
+        }
+        if (token !== TRADE_TOKEN) {
+          res.writeHead(401, tradeHeaders);
+          res.end(JSON.stringify({ ok: false, error: 'token 无效' }));
+          return;
+        }
+        let result;
+        if (url.pathname === '/api/trade/orders/cancel') result = await apiCancelOrder(data.orderId);
+        else if (url.pathname === '/api/trade/positions/close') result = await apiClosePosition(data.posId);
+        else if (url.pathname === '/api/trade/panic') result = await apiPanicCancel();
+        else { res.writeHead(404, tradeHeaders); res.end(JSON.stringify({ ok: false, error: 'unknown endpoint' })); return; }
+        res.writeHead(result.ok ? 200 : 400, tradeHeaders);
+        res.end(JSON.stringify(result));
+      } catch (e) {
+        res.writeHead(500, tradeHeaders);
+        res.end(JSON.stringify({ ok: false, error: e.message }));
+      }
+    });
     return;
   }
 
