@@ -2272,7 +2272,10 @@ async function getFuturesSymbols() {
   const ext = filePath.substring(filePath.lastIndexOf('.'));
   try {
     const content = await readFile(join(__dirname, filePath));
-    res.writeHead(200, { 'Content-Type': MIME[ext] || 'text/plain' });
+    // HTML 页面禁用缓存，保证手机端每次拿到最新版（trade-console 等）
+    const headers = { 'Content-Type': MIME[ext] || 'text/plain' };
+    if (ext === '.html') headers['Cache-Control'] = 'no-cache, no-store, must-revalidate';
+    res.writeHead(200, headers);
     res.end(content);
   } catch {
     res.writeHead(404);
