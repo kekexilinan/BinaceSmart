@@ -17,7 +17,7 @@ import {
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
   insertAutoPosition, updateAutoPosition, queryOpenPositions,
-  logAutoTrade, queryLatestSnapshot,
+  logAutoTrade, queryLatestSnapshot, queryLatestDecision,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -195,7 +195,15 @@ async function loadLatestDecision() {
       if (d && (d.action?.length || d.watch?.length)) return d;
     } catch (e) { logger.warn?.(`  ⚠ getLatestDecision 失败: ${e.message}`); }
   }
-  // 回退：从 symbol_snapshot 表取最新一批，重建"做多 high" 候选
+  // 回退 1：从 decision_snapshot 表读最新决策（PM2 重启后内存丢失时可用，含 status/score）
+  try {
+    const snap = queryLatestDecision();
+    if (snap?.action?.length) {
+      logger.log?.(`  ↩ 从 decision_snapshot 回退: ${snap.action.length} 个 action`);
+      return { action: snap.action, watch: snap.watch || [], rebound: snap.rebound || [], timestamp: snap.timestamp, source: 'decision_db' };
+    }
+  } catch (e) { logger.warn?.(`  ⚠ 回退读 decision_snapshot 失败: ${e.message}`); }
+  // 回退 2：从 symbol_snapshot 表取最新一批，重建“做多 high”候选
   try {
     const snaps = queryLatestSnapshot();
     if (snaps?.length) {
@@ -226,7 +234,11 @@ function isValidSignal(item) {
   if (!item) return false;
   if (item.side !== 'long') return false;
   // urgency 未直接存在 action item 上；用 status + score 替代：strengthened/continued/new + score≥60
-  const status = item.status || '';
+  // status 缺失时（旧快照）从 statusLabel 反推：延续/加强/新出现/反转确认 → continued
+  let status = item.status || '';
+  if (!status && item.statusLabel) {
+    if (/延续|加强|新出现|反转确认/.test(item.statusLabel)) status = 'continued';
+  }
   if (!['strengthened', 'continued', 'new'].includes(status)) return false;
   const score = Number(item.score ?? 0);
   if (score < 60) return false;
