@@ -242,9 +242,8 @@ function isValidSignal(item) {
   if (!['strengthened', 'continued', 'new'].includes(status)) return false;
   const score = Number(item.score ?? 0);
   if (score < 60) return false;
-  // 聪明钱仍在偏多（ratioDeltaPct 来自 enriched row；若缺失则放宽）
-  const delta = Number(item.ratioDeltaPct ?? NaN);
-  if (Number.isFinite(delta) && delta <= 0) return false;
+  // 不再要求 1h 大户比仍在增加（ratioDeltaPct>0）：side/score/status 三重筛选已足够严格，
+  // 避免把 CLO 这类“延续中但 1h 微降”的强信号全部排除（持仓阶段仍由止盈止损/剔出候选管理风险）
   return true;
 }
 
