@@ -143,10 +143,11 @@ async function runTick() {
   logger.log?.(`\n━━━ 🤖 自动交易 tick ${new Date(now).toISOString()} ━━━`);
 
   try {
-    // Step 1: 读取最新决策
-    const decision = await loadLatestDecision();
+    // Step 1: 等待本小时新决策生成（tick 与决策推送同点对齐，决策扫描耗时会导致读到旧决策漏单）
+    const decision = await waitForFreshDecision();
     const actionItems = decision?.action || [];
-    logger.log?.(`  📋 决策清单: action=${actionItems.length} · 时间 ${decision?.timestamp ? new Date(decision.timestamp).toISOString() : 'N/A'}`);
+    const ageSec = decision?.timestamp ? Math.round((now - decision.timestamp) / 1000) : -1;
+    logger.log?.(`  📋 决策清单: action=${actionItems.length} · 时间 ${decision?.timestamp ? new Date(decision.timestamp).toISOString() : 'N/A'}（${ageSec}s 前）`);
 
     // Step 2: 立即关注的候选（urgency=high + side=long）
     const candidates = actionItems.filter(isValidSignal);
@@ -169,11 +170,28 @@ async function runTick() {
 
 // ==================== 决策数据 ====================
 
+/** 等待本小时新决策生成（最多 120s）；tick 与决策推送同在 :50 触发，决策扫描需要数百毫秒~数十秒 */
+async function waitForFreshDecision(maxWaitMs = 120_000) {
+  const tickMinuteStart = Math.floor(Date.now() / 60_000) * 60_000;
+  const deadline = Date.now() + maxWaitMs;
+  let last = null;
+  while (Date.now() < deadline) {
+    last = await loadLatestDecision();
+    // 回退重建的候选 timestamp=Date.now() 会伪装成新鲜决策，不参与新鲜度判断
+    if (last?.timestamp >= tickMinuteStart && last.source !== 'snapshot') return last;
+    await new Promise(r => setTimeout(r, 3_000));
+  }
+  logger.warn?.(`  ⚠ 等待新决策超时（${Math.round(maxWaitMs / 1000)}s），使用旧决策/回退候选`);
+  return last;
+}
+
 async function loadLatestDecision() {
   // 优先用内存 getter（由 server 注入）
   if (typeof getDecisionGetter === 'function') {
     try {
       const d = getDecisionGetter();
+      // 字段归一：buildSmartTrendDecision 返回 capturedAt，统一成 timestamp 供新鲜度判断
+      if (d && d.timestamp == null && d.capturedAt != null) d.timestamp = d.capturedAt;
       if (d && (d.action?.length || d.watch?.length)) return d;
     } catch (e) { logger.warn?.(`  ⚠ getLatestDecision 失败: ${e.message}`); }
   }
