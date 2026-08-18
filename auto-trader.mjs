@@ -12,6 +12,7 @@ import { getNextHourShanghai } from './smart-trend-monitor.mjs';
 import {
   configureBinanceClient, getKlines, getMarkPrice,
   placeLimitOrder, placeMarketOrder, cancelOrder, getOrder, getPositionMode, isDryRun,
+  getExchangeInfo,
 } from './binance-client.mjs';
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
@@ -403,9 +404,15 @@ async function placeNewOrders(candidates, now) {
       const closes = closesOf(klines);
       const e7 = emaLast(closes, 7);
       const e25 = emaLast(closes, 25);
-      const { price: entryPrice, ema } = pickEntryPrice({ e7, e25, curPrice });
-      const qty = calcQty(cfg.orderUsdt, entryPrice);
+      const { price: rawEntry, ema } = pickEntryPrice({ e7, e25, curPrice });
+      const rules = await getSymbolRules(sym);
+      const entryPrice = alignNum(rawEntry, rules.tickSize);
+      const qty = calcQty(cfg.orderUsdt, entryPrice, rules);
       const pullback = ((curPrice - entryPrice) / curPrice) * 100;
+      if (!qty) {
+        logger.warn?.(`  ⚠ ${sym} 数量不满足交易规则（最小名义值/步长），跳过`);
+        continue;
+      }
 
       logger.log?.(`  📥 ${sym} 计划挂单: price=${entryPrice} (${ema}) · qty=${qty} · pullback=${pullback.toFixed(1)}% · cur=${curPrice}`);
 
@@ -467,12 +474,54 @@ function pickEntryPrice({ e7, e25, curPrice }) {
   return { price: (low + high) / 2, ema: 'mid' };
 }
 
-/** 根据 USDT 金额 + 价格算出数量（现货：按名义；合约：同）并做精度处理 */
-function calcQty(usdt, price) {
+/** 根据 USDT 金额 + 价格算出数量，并按交易所 stepSize/最小名义值对齐（否则报 -1111/-4164） */
+function calcQty(usdt, price, rules = {}) {
   if (!price || price <= 0) return 0;
-  const raw = usdt / price;
-  // 保留 6 位小数；实际下单前应根据 exchangeInfo.stepSize 进一步裁剪（P2 做）
-  return Math.floor(raw * 1_000_000) / 1_000_000;
+  let qty = alignNum(usdt / price, rules.stepSize);
+  if (rules.minNotional > 0 && qty * price < rules.minNotional) {
+    // 不满足最小名义值：向上补一个步长
+    if (rules.stepSize > 0) qty = alignNum(qty + rules.stepSize, rules.stepSize);
+    if (qty * price < rules.minNotional) return 0;
+  }
+  return qty;
+}
+
+/** 按精度步长向下截断数值（避免浮点尾差） */
+function alignNum(v, step) {
+  if (!step || !(step > 0) || !Number.isFinite(v)) return v;
+  const decimals = step >= 1 ? 0 : Math.min(8, Math.round(-Math.log10(step)));
+  return Number((Math.floor(v / step + 1e-9) * step).toFixed(decimals));
+}
+
+// ==================== 交易规则缓存（exchangeInfo） ====================
+
+let symbolRulesCache = { map: new Map(), ts: 0 };
+
+/** 拉取并缓存交易对精度规则（stepSize / tickSize / 最小名义值），1 小时过期 */
+async function getSymbolRules(symbol) {
+  const now = Date.now();
+  if (now - symbolRulesCache.ts > 3600 * 1000) symbolRulesCache = { map: new Map(), ts: now };
+  const hit = symbolRulesCache.map.get(symbol);
+  if (hit) return hit;
+  try {
+    const info = await getExchangeInfo();
+    for (const s of info?.symbols || []) {
+      const f = s.filters || [];
+      const lot = f.find(x => x.filterType === 'LOT_SIZE');
+      const price = f.find(x => x.filterType === 'PRICE_FILTER');
+      const notional = f.find(x => x.filterType === 'MIN_NOTIONAL');
+      symbolRulesCache.map.set(s.symbol, {
+        stepSize: parseFloat(lot?.stepSize || 0),
+        tickSize: parseFloat(price?.tickSize || 0),
+        minNotional: parseFloat(notional?.notional || notional?.minNotional || 0),
+      });
+    }
+    symbolRulesCache.ts = now;
+  } catch (e) {
+    logger.warn?.(`  ⚠ exchangeInfo 拉取失败（本次不做精度对齐）: ${e.message}`);
+    return {};
+  }
+  return symbolRulesCache.map.get(symbol) || {};
 }
 
 // ==================== 对外查询（供 API/面板） ====================
