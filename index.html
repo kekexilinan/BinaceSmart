@@ -84,6 +84,11 @@ tr:hover td { background: #1c2128; }
 .badge-watch { background: #2d2200; color: #d29922; }
 .badge-invalid { background: #3d1515; color: #f85149; }
 
+/* 可点击币种：点击切换单币多空比趋势图 */
+.symbol-link { cursor: pointer; border-bottom: 1px dashed #30363d; transition: all 0.15s; }
+.symbol-link:hover { color: #58a6ff; border-bottom-color: #58a6ff; }
+.symbol-link.symbol-active { color: #58a6ff; border-bottom-style: solid; }
+
 /* Info Banner */
 .info-banner { background: #0c2d6b; border: 1px solid #1f6feb; border-radius: 8px; padding: 12px 16px; margin-top: 16px; }
 .info-banner .title { font-weight: 600; font-size: 12px; margin-bottom: 4px; color: #58a6ff; }
@@ -687,11 +692,15 @@ async function loadDecision() {
   const invalids = d.invalidated || [];
   const rebounds = d.rebound || [];
 
+  // 可点击币种名：data-symbol 供事件委托切换趋势图
+  const symOf = (x) => x.symbol || (x.label ? String(x.label).toUpperCase() + 'USDT' : '');
+  const symCell = (x) => '<strong class="symbol-link" data-symbol="' + symOf(x) + '" title="点击查看多空比趋势">' + (x.label || x.symbol) + '</strong>';
+
   const cardAction = document.getElementById('cardAction');
   if (cardAction) {
     const pillCls = (s) => s === 'long' ? 'pill-long' : s === 'short' ? 'pill-short' : 'pill-watch';
     const rows = actions.map(a =>
-      '<tr><td><strong>' + a.label + '</strong></td>' +
+      '<tr><td>' + symCell(a) + '</td>' +
       '<td><span class="pill ' + pillCls(a.side) + '">' + a.tradeView + '</span></td>' +
       '<td style="font-size:10px;color:#8b949e">' + (a.statusLabel || '-') + '</td></tr>'
     ).join('');
@@ -706,7 +715,7 @@ async function loadDecision() {
       const isReb = w.change24h !== undefined;
       const pill = isReb ? '<span class="pill pill-short">反弹观察</span>' : '<span class="pill pill-watch">' + (w.tradeView || '观望') + '</span>';
       const cont = w.statusLabel || (isReb ? '急跌反弹' : '-');
-      return '<tr><td><strong>' + w.label + '</strong></td><td>' + pill + '</td><td style="font-size:10px;color:#8b949e">' + cont + '</td></tr>';
+      return '<tr><td>' + symCell(w) + '</td><td>' + pill + '</td><td style="font-size:10px;color:#8b949e">' + cont + '</td></tr>';
     }).join('');
     cardWatch.innerHTML = '<div class="title"><span class="badge badge-watch">观察 ' + allWatch.length + '</span> 持续跟踪</div>' +
       (rows ? '<table><thead><tr><th>币种</th><th>状态</th><th>连续性</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无</div>');
@@ -715,7 +724,7 @@ async function loadDecision() {
   const cardInvalid = document.getElementById('cardInvalid');
   if (cardInvalid) {
     const rows = invalids.map(inv =>
-      '<tr><td><strong>' + (inv.label || inv.symbol) + '</strong></td><td>减仓退出</td><td style="font-size:10px;color:#8b949e">' + (inv.statusLabel || '已退出') + '</td></tr>'
+      '<tr><td>' + symCell(inv) + '</td><td>减仓退出</td><td style="font-size:10px;color:#8b949e">' + (inv.statusLabel || '已退出') + '</td></tr>'
     ).join('');
     cardInvalid.innerHTML = '<div class="title"><span class="badge badge-invalid">已失效 ' + invalids.length + '</span> 退出观望</div>' +
       (rows ? '<table><thead><tr><th>币种</th><th>建议</th><th>连续性</th></tr></thead><tbody>' + rows + '</tbody></table>' : '<div style="color:#8b949e;font-size:11px;padding:8px">暂无失效标的</div>');
@@ -723,6 +732,36 @@ async function loadDecision() {
 
   const verdictEl = document.querySelector('.stat-card:first-child .stat-value');
   if (verdictEl && d.verdict) verdictEl.textContent = d.verdict;
+
+  // 高亮当前趋势图已选中的币种
+  const cur = getSelectedSymbol();
+  document.querySelectorAll('#decisionGrid .symbol-link').forEach(el => {
+    el.classList.toggle('symbol-active', el.dataset.symbol === cur);
+  });
+}
+
+// 点击操作清单币种 → 切换单币多空比趋势图并滚动到图表区
+function switchSymbolTo(symbol) {
+  if (!symbol) return;
+  const sel = document.getElementById('symbolSelect');
+  const input = document.getElementById('symbolSearchInput');
+  if (sel) sel.value = symbol;
+  if (input) input.value = symbol.replace('USDT', '');
+  localStorage.setItem('dashSymbol', symbol);
+  loadSymbolTrend(symbol);
+  document.querySelectorAll('#decisionGrid .symbol-link').forEach(el => {
+    el.classList.toggle('symbol-active', el.dataset.symbol === symbol);
+  });
+  const chartSection = document.getElementById('ratioChart')?.closest('.section');
+  if (chartSection) chartSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+const decisionGrid = document.getElementById('decisionGrid');
+if (decisionGrid) {
+  decisionGrid.addEventListener('click', (e) => {
+    const link = e.target.closest('.symbol-link');
+    if (link) switchSymbolTo(link.dataset.symbol);
+  });
 }
 
 async function loadAll() {
