@@ -9,6 +9,7 @@ import { fileURLToPath } from 'node:url';
 import { randomUUID } from 'node:crypto';
 import { emaLast, closesOf } from './ema.mjs';
 import { getNextHourShanghai } from './smart-trend-monitor.mjs';
+import { resolveActionGuide } from './smart-trend-decision.mjs';
 import {
   configureBinanceClient, getKlines, getMarkPrice,
   placeLimitOrder, placeMarketOrder, cancelOrder, getOrder, getPositionMode, isDryRun,
@@ -402,14 +403,23 @@ function recordTickSymbols(tickTs, actionItems, candidates) {
     const candSet = new Set(candidates.map(c => c.symbol?.toUpperCase()));
     const rows = (actionItems || [])
       .filter(it => it?.symbol)
-      .map(it => ({
-        symbol: it.symbol,
-        side: it.side || 'long',
-        score: Number(it.score ?? 0),
-        status: it.status || '',
-        statusLabel: it.statusLabel || '',
-        isCandidate: candSet.has(String(it.symbol).toUpperCase()),
-      }));
+      .map(it => {
+        // 建议操作与飞书推送同源（resolveActionGuide），记录时固化文案
+        let guide = '';
+        try {
+          const g = resolveActionGuide(it);
+          guide = `${g.sceneIcon} ${g.action}`;
+        } catch { /* 字段缺失时留空，前端回退内置文案 */ }
+        return {
+          symbol: it.symbol,
+          side: it.side || 'long',
+          score: Number(it.score ?? 0),
+          status: it.status || '',
+          statusLabel: it.statusLabel || '',
+          isCandidate: candSet.has(String(it.symbol).toUpperCase()),
+          actionGuide: guide,
+        };
+      });
     insertTickSymbols(tickTs, rows);
   } catch (e) { logger.warn?.(`  ⚠ 币况追踪记录失败（不影响交易）: ${e.message}`); }
 }
@@ -423,14 +433,21 @@ export function getSymbolTrackStats(days = 3) {
 
   const list = stats.map(s => {
     const seen = seenSetOf(s.symbol);
-    // 连续出现：从最新 tick 往回数
-    let streak = 0;
-    for (const t of tickTimes) { if (seen.has(t)) streak++; else break; }
-    // 缺席：最新 tick 未出现时，连续缺席的 tick 数
-    let absent = 0;
-    if (streak === 0) {
-      for (const t of tickTimes) { if (!seen.has(t)) absent++; else break; }
-    }
+    // 连续出现：从指定 tick 往回数（latest=最新，prev=上一 tick，用于趋势箭头）
+    const streakFrom = (fromIdx) => {
+      let n = 0;
+      for (let i = fromIdx; i < tickTimes.length; i++) { if (seen.has(tickTimes[i])) n++; else break; }
+      return n;
+    };
+    const absentFrom = (fromIdx) => {
+      let n = 0;
+      for (let i = fromIdx; i < tickTimes.length; i++) { if (!seen.has(tickTimes[i])) n++; else break; }
+      return n;
+    };
+    const streak = streakFrom(0);
+    const prevStreak = tickTimes.length > 1 ? streakFrom(1) : 0;
+    const absent = streak === 0 ? absentFrom(0) : 0;
+    const prevAbsent = streak === 0 && tickTimes.length > 1 ? absentFrom(1) : 0;
     return {
       symbol: s.symbol,
       appearances: s.appearances,
@@ -442,18 +459,28 @@ export function getSymbolTrackStats(days = 3) {
       lastSide: s.last_side,
       lastIsCandidate: !!s.last_is_candidate,
       streak,
+      streakTrend: trendOf(streak, prevStreak),
       absent,
-      advice: adviceOf({ streak, absent, lastIsCandidate: !!s.last_is_candidate, lastScore: Number(s.last_score) || 0 }),
+      absentTrend: trendOf(absent, prevAbsent),
+      advice: adviceOf({ streak, absent, lastIsCandidate: !!s.last_is_candidate, lastActionGuide: s.last_action_guide }),
     };
   });
   return { latestTick, tickCount: tickTimes.length, days, list };
 }
 
-/** 建议操作规则：连续出现越多信号越强；缺席越久越应放弃 */
-function adviceOf({ streak, absent, lastIsCandidate, lastScore }) {
-  if (streak >= 3 && lastIsCandidate) return { level: 'strong', text: '强信号·持续做多关注' };
-  if (streak >= 2 && lastIsCandidate) return { level: 'watch', text: '关注·可挂单' };
-  if (streak >= 1) return { level: 'track', text: lastIsCandidate ? '新信号·观察' : '强度不足·仅观察' };
+/** 与上一 tick 对比的趋势箭头：up/down/flat */
+function trendOf(cur, prev) {
+  if (cur > prev) return 'up';
+  if (cur < prev) return 'down';
+  return 'flat';
+}
+
+/** 建议操作：文案与飞书推送同源（tick 记录时固化）；缺席币种保留缺席提示 */
+function adviceOf({ streak, absent, lastIsCandidate, lastActionGuide }) {
+  if (streak >= 1) {
+    if (lastActionGuide) return { level: lastIsCandidate ? (streak >= 3 ? 'strong' : streak >= 2 ? 'watch' : 'track') : 'track', text: lastActionGuide };
+    return { level: 'track', text: lastIsCandidate ? '新信号·观察' : '强度不足·仅观察' };
+  }
   if (absent === 1) return { level: 'absent', text: '缺席 1 tick·宽限观察' };
   if (absent <= 3) return { level: 'absent', text: `缺席 ${absent} tick·等待回归` };
   return { level: 'faded', text: `缺席 ${absent} tick·信号消退` };

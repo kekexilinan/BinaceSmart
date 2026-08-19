@@ -140,9 +140,12 @@ export async function initDB() {
       score           REAL,
       status          TEXT,
       status_label    TEXT,
-      is_candidate    INTEGER DEFAULT 0
+      is_candidate    INTEGER DEFAULT 0,
+      action_guide    TEXT
     )
   `);
+  // 存量 DB 迁移：tick_symbol_log 补 action_guide 列（与飞书推送同源的建议操作文案）
+  try { db.run('ALTER TABLE tick_symbol_log ADD COLUMN action_guide TEXT'); } catch { /* 列已存在 */ }
 
   // 索引
   db.run('CREATE INDEX IF NOT EXISTS idx_sentiment_ts ON market_sentiment(timestamp)');
@@ -479,9 +482,10 @@ export function logAutoTrade(symbol, action, detail) {
 export function insertTickSymbols(tickTs, rows, keepDays = 3) {
   if (!db || !tickTs) return;
   for (const r of rows || []) {
-    db.run(`INSERT INTO tick_symbol_log (tick_ts, symbol, side, score, status, status_label, is_candidate) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+    db.run(`INSERT INTO tick_symbol_log (tick_ts, symbol, side, score, status, status_label, is_candidate, action_guide) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`, [
       tickTs, String(r.symbol || '').toUpperCase(), r.side || 'long',
       r.score ?? null, r.status || null, r.statusLabel || null, r.isCandidate ? 1 : 0,
+      r.actionGuide || null,
     ]);
   }
   db.run(`DELETE FROM tick_symbol_log WHERE tick_ts < ?`, [tickTs - keepDays * 86400_000]);
@@ -505,7 +509,7 @@ export function querySymbolTickStats({ days = 3 } = {}) {
            SUM(t.is_candidate) AS candidate_count,
            MAX(t.tick_ts) AS last_seen,
            t.score AS last_score, t.status AS last_status, t.status_label AS last_status_label,
-           t.side AS last_side, t.is_candidate AS last_is_candidate
+           t.side AS last_side, t.is_candidate AS last_is_candidate, t.action_guide AS last_action_guide
     FROM tick_symbol_log t
     JOIN (SELECT symbol AS s, MAX(tick_ts) AS mts FROM tick_symbol_log WHERE tick_ts > ? GROUP BY symbol) l
       ON t.symbol = l.s AND t.tick_ts = l.mts

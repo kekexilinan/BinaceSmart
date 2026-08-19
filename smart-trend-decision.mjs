@@ -88,7 +88,7 @@ function sceneIcon(scene) {
 
 const DECISION_SCENE_LEGEND = '_场景图标：📈 顺势 · 🔄 反转 · ⏸ 观望_';
 
-function resolveActionGuide(item) {
+export function resolveActionGuide(item) {
   const playbook = ACTION_PLAYBOOK[item.tradeView] || ACTION_PLAYBOOK.neutral_watch;
 
   if (item.status === 'reversal_watch') {

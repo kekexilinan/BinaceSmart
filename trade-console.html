@@ -203,7 +203,7 @@ tr:hover td { background: #1c2128; }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>币种</th><th>最新状态</th><th style="text-align:right">得分</th><th style="text-align:right">出现次数</th><th style="text-align:right">连续出现</th><th style="text-align:right">缺席 tick</th><th>建议操作</th><th>最后出现</th>
+          <th>币种</th><th>最新状态</th><th style="text-align:right">出现次数</th><th style="text-align:right">连续出现</th><th style="text-align:right">缺席 tick</th><th>建议操作</th><th>最后出现</th>
         </tr></thead>
         <tbody id="trackBody"></tbody>
       </table>
@@ -449,14 +449,14 @@ function renderTrack(data) {
     const sym = r.symbol.replace('USDT', '');
     const stLabel = STATUS_LABEL[r.lastStatus] || r.lastStatusLabel || r.lastStatus || '--';
     const stColor = r.lastIsCandidate ? '#3fb950' : '#8b949e';
-    const streakCell = r.streak > 0 ? `<span class="positive">${'●'.repeat(Math.min(r.streak, 8))}${r.streak > 8 ? '+' : ''} ${r.streak}</span>` : '<span class="muted">--</span>';
-    const absentCell = r.streak > 0 ? '<span class="muted">0</span>' : `<span class="${r.absent >= 4 ? 'negative' : ''}">${r.absent}</span>`;
+    const arrow = (trend) => trend === 'up' ? '<span class="positive">▲</span> ' : trend === 'down' ? '<span class="negative">▼</span> ' : '<span class="muted">▪</span> ';
+    const streakCell = r.streak > 0 ? `${arrow(r.streakTrend)}<span class="positive">${'●'.repeat(Math.min(r.streak, 8))}${r.streak > 8 ? '+' : ''} ${r.streak}</span>` : `<span class="muted">${arrow(r.streakTrend)}--</span>`;
+    const absentCell = r.streak > 0 ? '<span class="muted">▪ 0</span>' : `${arrow(r.absentTrend)}<span class="${r.absent >= 4 ? 'negative' : ''}">${r.absent}</span>`;
     const adv = r.advice || {};
     return `<tr>
       <td style="font-weight:600">${sym}</td>
       <td><span style="color:${stColor}">${stLabel}</span>${r.lastIsCandidate ? ' <span class="pill pill-live" style="font-size:10px">候选</span>' : ''}</td>
-      <td style="text-align:right">${r.lastScore ?? '--'}</td>
-      <td style="text-align:right">${r.appearances} <span class="muted">(候选 ${r.candidateCount})</span></td>
+      <td style="text-align:right">${r.appearances}</td>
       <td style="text-align:right">${streakCell}</td>
       <td style="text-align:right">${absentCell}</td>
       <td><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;${ADVICE_STYLE[adv.level] || ADVICE_STYLE.absent}">${adv.text || '--'}</span></td>
