@@ -2246,7 +2246,7 @@ async function getFuturesSymbols() {
     res.end(JSON.stringify(getTradeLogs({ limit: Number(url.searchParams.get('limit') || 300) })));
     return;
   }
-  if (url.pathname === '/api/trade/config') {
+  if (url.pathname === '/api/trade/config' && req.method === 'GET') {
     if (!tradePwdOk(req.headers['x-trade-password'])) {
       res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
     }

@@ -72,7 +72,7 @@ let getDecisionGetter = null;
  * @param {object} [opts.feishu] 飞书推送（{ sendCard, sendText }）
  */
 export async function startAutoTrader(opts = {}) {
-  cfg = {
+  const base = {
     ...DEFAULTS,
     enabled: opts.enabled ?? cfg.enabled,
     dryRun: opts.dryRun ?? cfg.dryRun,
@@ -87,8 +87,11 @@ export async function startAutoTrader(opts = {}) {
     orderTtlMin: Number(opts.orderTtlMin ?? cfg.orderTtlMin),
     tpPct: Number(opts.tpPct ?? cfg.tpPct),
     slPct: Number(opts.slPct ?? cfg.slPct),
-    // 运行时持久化配置优先级最高（管理台修改后重启不丢失）
-    ...Object.fromEntries(RUNTIME_CONFIG_KEYS.map(k => [k, Number(runtimeConfig[k] ?? cfg[k])]).filter(([, v]) => Number.isFinite(v))),
+  };
+  // 运行时持久化配置优先级最高（管理台修改后重启不丢失）——必须基于已合并 .env 的 base，不能用旧 cfg（会退回默认值）
+  cfg = {
+    ...base,
+    ...Object.fromEntries(RUNTIME_CONFIG_KEYS.map(k => [k, Number(runtimeConfig[k] ?? base[k])]).filter(([, v]) => Number.isFinite(v))),
   };
   if (typeof opts.getLatestDecision === 'function') getDecisionGetter = opts.getLatestDecision;
   logger = opts.logger || logger;
