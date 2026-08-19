@@ -347,24 +347,24 @@ async function maintainPendingOrders(candidates, now) {
     // 聪明钱加仓趋势
     const match = candidates.find(c => c.symbol?.toUpperCase() === order.symbol);
     const stillIn = match && candSet.has(order.symbol);
-    if (!stillIn) {
-      // 宽限期：剔出候选后连续缺席 cancelGraceTicks 个 tick 才撤，避免单 tick 波动导致频繁撤单重挂
-      const miss = (Number(order.drop_miss) || 0) + 1;
-      if (miss < (cfg.cancelGraceTicks || 0)) {
-        updateAutoOrder(order.id, { dropMiss: miss });
-        logger.log?.(`  ⏳ ${order.symbol} 暂离清单（${miss}/${cfg.cancelGraceTicks} tick），保留挂单观察`);
-        continue;
+    if (stillIn) {
+      if (Number(order.drop_miss) > 0) updateAutoOrder(order.id, { dropMiss: 0 }); // 回归清单，缺席计数清零
+      // 更新"是否仍在加仓"标记
+      const delta = Number(match?.ratioDeltaPct ?? NaN);
+      const increased = !Number.isFinite(delta) || delta > 0;
+      if (!!order.smart_money_increased !== increased) {
+        updateAutoOrder(order.id, { smartMoneyIncreased: increased });
       }
-      await cancelLocalOrder(order, `dropped_${miss}ticks`);
       continue;
     }
-    if (Number(order.drop_miss) > 0) updateAutoOrder(order.id, { dropMiss: 0 }); // 回归清单，缺席计数清零
-    // 更新"是否仍在加仓"标记
-    const delta = Number(match?.ratioDeltaPct ?? NaN);
-    const increased = !Number.isFinite(delta) || delta > 0;
-    if (!!order.smart_money_increased !== increased) {
-      updateAutoOrder(order.id, { smartMoneyIncreased: increased });
+    // 宽限期：剔出候选后连续缺席 cancelGraceTicks 个 tick 才撤，避免单 tick 波动导致频繁撤单重挂
+    const miss = (Number(order.drop_miss) || 0) + 1;
+    if (miss < (cfg.cancelGraceTicks || 0)) {
+      updateAutoOrder(order.id, { dropMiss: miss });
+      logger.log?.(`  ⏳ ${order.symbol} 暂离清单（${miss}/${cfg.cancelGraceTicks} tick），保留挂单观察`);
+      continue;
     }
+    await cancelLocalOrder(order, `dropped_${miss}ticks`);
   }
 }
 
