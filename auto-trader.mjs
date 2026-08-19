@@ -23,6 +23,8 @@ import {
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const DATA_DIR = join(__dirname, 'data');
 const DECISION_STATE_FILE = join(DATA_DIR, 'smart-trend-decision-state.json');
+/** 运行时配置持久化文件（管理台修改后写入，启动时加载，优先级高于 .env） */
+const RUNTIME_CONFIG_FILE = join(DATA_DIR, 'auto-trader-config.json');
 
 // 默认配置
 const DEFAULTS = {
@@ -45,6 +47,12 @@ const DEFAULTS = {
 };
 
 let cfg = { ...DEFAULTS };
+/** 运行时可调参数（管理台持久化到 data/auto-trader-config.json） */
+const RUNTIME_CONFIG_KEYS = ['maxPositions', 'orderUsdt', 'leverage', 'pullbackLowPct', 'pullbackHighPct', 'orderTtlMin', 'tpPct', 'slPct'];
+let runtimeConfig = {};
+try {
+  runtimeConfig = JSON.parse(await readFile(RUNTIME_CONFIG_FILE, 'utf8'));
+} catch { /* 无持久化配置时用 .env/默认值 */ }
 let tickTimer = null;
 let logger = console;
 let running = false;
@@ -79,6 +87,8 @@ export async function startAutoTrader(opts = {}) {
     orderTtlMin: Number(opts.orderTtlMin ?? cfg.orderTtlMin),
     tpPct: Number(opts.tpPct ?? cfg.tpPct),
     slPct: Number(opts.slPct ?? cfg.slPct),
+    // 运行时持久化配置优先级最高（管理台修改后重启不丢失）
+    ...Object.fromEntries(RUNTIME_CONFIG_KEYS.map(k => [k, Number(runtimeConfig[k] ?? cfg[k])]).filter(([, v]) => Number.isFinite(v))),
   };
   if (typeof opts.getLatestDecision === 'function') getDecisionGetter = opts.getLatestDecision;
   logger = opts.logger || logger;
@@ -694,4 +704,35 @@ export async function apiConsoleStatus() {
     try { exchangePositions = await getAccountPositions(); } catch (e) { logger.warn?.(`  ⚠ 查交易所持仓失败: ${e.message}`); }
   }
   return { ...status, balance, exchangePositions };
+}
+
+/** 读取当前可调配置（供管理台展示） */
+export function getRuntimeConfig() {
+  return Object.fromEntries(RUNTIME_CONFIG_KEYS.map(k => [k, cfg[k]]));
+}
+
+/** 更新运行时配置：内存立即生效（下个 tick 使用）+ 持久化到 data/auto-trader-config.json */
+export async function updateRuntimeConfig(patch = {}) {
+  const applied = {};
+  for (const k of RUNTIME_CONFIG_KEYS) {
+    if (patch[k] == null || patch[k] === '') continue;
+    const v = Number(patch[k]);
+    if (!Number.isFinite(v) || v <= 0) return { ok: false, reason: `参数 ${k} 必须是正数（收到 ${patch[k]}）` };
+    applied[k] = v;
+  }
+  if (!Object.keys(applied).length) return { ok: false, reason: '没有有效参数' };
+  if (applied.pullbackLowPct != null && applied.pullbackHighPct != null && applied.pullbackLowPct >= applied.pullbackHighPct) {
+    return { ok: false, reason: '回踩下限必须小于上限（如 20 < 30）' };
+  }
+  Object.assign(cfg, applied);
+  Object.assign(runtimeConfig, applied);
+  try {
+    await mkdir(DATA_DIR, { recursive: true });
+    await writeFile(RUNTIME_CONFIG_FILE, JSON.stringify(runtimeConfig, null, 2));
+  } catch (e) {
+    return { ok: false, reason: `参数已在内存生效，但持久化失败: ${e.message}` };
+  }
+  logAutoTrade(null, 'config_update', { source: 'manual', applied });
+  logger.log?.(`  ⚙ 配置已更新（下个 tick 生效）: ${JSON.stringify(applied)}`);
+  return { ok: true, applied, config: getRuntimeConfig() };
 }

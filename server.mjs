@@ -27,7 +27,7 @@ import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHea
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
-import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs } from './auto-trader.mjs';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs, getRuntimeConfig, updateRuntimeConfig } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -2246,6 +2246,14 @@ async function getFuturesSymbols() {
     res.end(JSON.stringify(getTradeLogs({ limit: Number(url.searchParams.get('limit') || 300) })));
     return;
   }
+  if (url.pathname === '/api/trade/config') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
+    res.writeHead(200, tradeHeaders);
+    res.end(JSON.stringify(getRuntimeConfig()));
+    return;
+  }
   if (url.pathname.startsWith('/api/trade/') && req.method === 'POST') {
     let body = '';
     req.on('data', c => body += c);
@@ -2262,6 +2270,7 @@ async function getFuturesSymbols() {
         if (url.pathname === '/api/trade/orders/cancel') result = await apiCancelOrder(data.orderId);
         else if (url.pathname === '/api/trade/positions/close') result = await apiClosePosition(data.posId);
         else if (url.pathname === '/api/trade/panic') result = await apiPanicCancel();
+        else if (url.pathname === '/api/trade/config') result = await updateRuntimeConfig(data);
         else { res.writeHead(404, tradeHeaders); res.end(JSON.stringify({ ok: false, error: 'unknown endpoint' })); return; }
         res.writeHead(result.ok ? 200 : 400, tradeHeaders);
         res.end(JSON.stringify(result));

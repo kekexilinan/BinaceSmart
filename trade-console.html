@@ -57,7 +57,18 @@ tr:hover td { background: #1c2128; }
 .btn-danger:hover { background: #56201d; }
 .btn-warn { background: #2d2200; border-color: #d2992255; color: #d29922; }
 .btn-warn:hover { background: #3d2f06; }
+.btn-live { background: #1b4332; border-color: #238636; color: #3fb950; font-weight: 600; }
+.btn-live:hover { background: #238636; color: #fff; }
 .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* 策略参数配置面板 */
+.cfg-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
+.cfg-item { display: flex; flex-direction: column; gap: 6px; font-size: 12px; color: #8b949e; }
+.cfg-item input {
+  background: #0d1117; border: 1px solid #30363d; border-radius: 6px;
+  color: #e6edf3; padding: 8px 10px; font-size: 14px; outline: none; width: 100%; box-sizing: border-box;
+}
+.cfg-item input:focus { border-color: #58a6ff; }
 
 .banner { display: none; padding: 10px 14px; border-radius: 8px; font-size: 12px; margin-bottom: 14px; border: 1px solid; }
 .banner.error { display: block; background: #3d151533; border-color: #f85149; color: #f85149; }
@@ -94,6 +105,7 @@ tr:hover td { background: #1c2128; }
   .header-right { width: 100%; justify-content: space-between; }
   .header-right .btn { flex: 1; padding: 10px 8px; font-size: 13px; }
   .stats-grid { grid-template-columns: repeat(3, 1fr); gap: 8px; margin-bottom: 14px; }
+  .cfg-grid { grid-template-columns: repeat(2, 1fr); }
   .stat-card { padding: 10px 6px; }
   .stat-value { font-size: 15px; }
   .stat-label { font-size: 10px; }
@@ -148,6 +160,7 @@ tr:hover td { background: #1c2128; }
     <div class="tab active" data-tab="orders" onclick="switchTab('orders')">挂单 <span class="count" id="cntOrders">0</span></div>
     <div class="tab" data-tab="positions" onclick="switchTab('positions')">持仓 <span class="count" id="cntPositions">0</span></div>
     <div class="tab" data-tab="logs" onclick="switchTab('logs')">操作日志</div>
+    <div class="tab" data-tab="config" onclick="switchTab('config')">⚙ 策略参数</div>
   </div>
 
   <div id="tab-orders">
@@ -184,6 +197,26 @@ tr:hover td { background: #1c2128; }
     </div>
   </div>
 
+  <div id="tab-config" style="display:none">
+    <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;">
+      <div style="color:#8b949e;font-size:12px;margin-bottom:12px;">修改后下个 tick（每小时 :50）生效 · 保存到服务器 data/auto-trader-config.json，重启不丢失 · TP/SL 仅对之后新开仓位生效</div>
+      <div class="cfg-grid">
+        <label class="cfg-item"><span>单笔下单金额 (USDT)</span><input type="number" id="cfg-orderUsdt" min="1" step="1"></label>
+        <label class="cfg-item"><span>最大仓位数</span><input type="number" id="cfg-maxPositions" min="1" step="1"></label>
+        <label class="cfg-item"><span>杠杆倍数</span><input type="number" id="cfg-leverage" min="1" step="1"></label>
+        <label class="cfg-item"><span>挂单 TTL (分钟)</span><input type="number" id="cfg-orderTtlMin" min="1" step="5"></label>
+        <label class="cfg-item"><span>回踩下限 %（如 20 = -20%）</span><input type="number" id="cfg-pullbackLowPct" min="1" step="1"></label>
+        <label class="cfg-item"><span>回踩上限 %（如 30 = -30%）</span><input type="number" id="cfg-pullbackHighPct" min="1" step="1"></label>
+        <label class="cfg-item"><span>止盈 TP %</span><input type="number" id="cfg-tpPct" min="0.5" step="0.5"></label>
+        <label class="cfg-item"><span>止损 SL %</span><input type="number" id="cfg-slPct" min="0.5" step="0.5"></label>
+      </div>
+      <div style="margin-top:14px;display:flex;gap:8px;">
+        <button class="btn btn-live" onclick="saveConfig()">💾 保存并生效</button>
+        <button class="btn" onclick="loadConfig(true)">↺ 重新加载</button>
+      </div>
+    </div>
+  </div>
+
   <div class="footer">
     <span id="engineInfo"></span>
     <span id="lastUpdate"></span>
@@ -212,6 +245,7 @@ function hideMask() {
   $('loginMask').classList.add('hidden');
   $('mainUI').style.visibility = 'visible';
   $('loginErr').textContent = '';
+  loadConfig();
 }
 
 async function tryAuth(pwd) {
@@ -357,7 +391,7 @@ function renderLogs(logs) {
   const body = $('logsBody');
   body.innerHTML = '';
   $('logsEmpty').style.display = list.length ? 'none' : 'block';
-  const ACTION_LABEL = { place: '挂单', cancel: '撤单', fill: '成交', open: '开仓', close: '平仓', close_fail: '平仓失败', close_manual: '手动平仓', panic_cancel: '一键撤单' };
+  const ACTION_LABEL = { place: '挂单', cancel: '撤单', fill: '成交', open: '开仓', close: '平仓', close_fail: '平仓失败', close_manual: '手动平仓', panic_cancel: '一键撤单', config_update: '改参数', sync_cancel: '同步撤单' };
   for (const l of list) {
     let detail = l.detail || '';
     let source = 'auto';
@@ -379,7 +413,33 @@ function renderLogs(logs) {
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  ['orders', 'positions', 'logs'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+  ['orders', 'positions', 'logs', 'config'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+}
+
+// ====== 策略参数配置 ======
+const CFG_FIELDS = ['orderUsdt', 'maxPositions', 'leverage', 'orderTtlMin', 'pullbackLowPct', 'pullbackHighPct', 'tpPct', 'slPct'];
+let cfgLoaded = false;
+async function loadConfig(notify) {
+  try {
+    const c = await api('/api/trade/config');
+    CFG_FIELDS.forEach(k => { const el = $('cfg-' + k); if (el && c[k] != null) el.value = c[k]; });
+    cfgLoaded = true;
+    if (notify) banner('info', '✅ 已加载服务器最新配置');
+  } catch (e) {
+    if (e.message !== 'unauthorized' && notify) banner('error', '加载配置失败: ' + e.message);
+  }
+}
+async function saveConfig() {
+  const patch = {};
+  for (const k of CFG_FIELDS) {
+    const v = parseFloat($('cfg-' + k).value);
+    if (!Number.isFinite(v) || v <= 0) { banner('error', `参数 ${k} 必须是正数`); return; }
+    patch[k] = v;
+  }
+  if (!confirm(`确认保存策略参数？\n单笔 ${patch.orderUsdt}U · 最多 ${patch.maxPositions} 仓 · 杠杆 ${patch.leverage}x\n回踩 -${patch.pullbackLowPct}% ~ -${patch.pullbackHighPct}% · TTL ${patch.orderTtlMin}分\nTP +${patch.tpPct}% / SL -${patch.slPct}%`)) return;
+  const r = await post('/api/trade/config', patch);
+  if (r.ok) banner('info', '✅ 配置已保存，下个 tick 生效');
+  else banner('error', '❌ 保存失败: ' + (r.reason || r.error || '未知错误'));
 }
 
 async function cancelOrder(id, symbol, price) {
