@@ -25,6 +25,9 @@ body {
 .header h1 { font-size: 22px; font-weight: 600; }
 .header .sub { color: #8b949e; font-size: 12px; margin-top: 4px; }
 .time-select { background: #161b22; border: 1px solid #30363d; color: #e6edf3; padding: 6px 12px; border-radius: 6px; font-size: 13px; cursor: pointer; }
+/* 交易管理台入口按钮 */
+.console-entry { display: inline-block; background: #1b4332; border: 1px solid #238636; color: #3fb950; padding: 6px 12px; border-radius: 6px; font-size: 13px; font-weight: 600; text-decoration: none; cursor: pointer; transition: all 0.15s; white-space: nowrap; }
+.console-entry:hover { background: #238636; color: #fff; }
 
 /* Stats Grid */
 .stats-grid { display: grid; grid-template-columns: repeat(5, 1fr); gap: 10px; margin-bottom: 20px; }
@@ -130,6 +133,7 @@ tr:hover td { background: #1c2128; }
   .header { flex-direction: column; align-items: flex-start; gap: 10px; }
   .header h1 { font-size: 18px; }
   .time-select { width: 100%; }
+  .console-entry { text-align: center; }
   .stats-grid { grid-template-columns: repeat(2, 1fr); gap: 8px; }
   .stats-grid .stat-card:first-child { grid-column: 1 / -1; padding: 16px; }
   .stats-grid .stat-card:first-child .stat-value { font-size: 22px; }
@@ -170,12 +174,15 @@ tr:hover td { background: #1c2128; }
     <h1>BinaceSmart Dashboard</h1>
     <div class="sub">币安合约聪明钱监控 · 实时多空趋势分析 · 最后更新: <span id="lastUpdate">加载中...</span>（北京时间）</div>
   </div>
-  <select class="time-select" id="timeRange">
-    <option value="6h">6 小时</option>
-    <option value="24h" selected>24 小时</option>
-    <option value="3d">3 天</option>
-    <option value="7d">7 天</option>
-  </select>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <a href="/trade-console.html" target="_blank" class="console-entry" title="新标签页打开">🤖 交易管理台</a>
+    <select class="time-select" id="timeRange">
+      <option value="6h">6 小时</option>
+      <option value="24h" selected>24 小时</option>
+      <option value="3d">3 天</option>
+      <option value="7d">7 天</option>
+    </select>
+  </div>
 </div>
 
 <!-- ==================== TOP STATS ==================== -->
