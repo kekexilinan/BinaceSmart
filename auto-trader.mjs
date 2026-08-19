@@ -44,6 +44,7 @@ const DEFAULTS = {
   tpPct: 15,
   slPct: 10,
   cancelGraceTicks: 2,
+  chasePct: 8,
   tickEveryMin: 50,
   klineInterval: '1h',
   klineLimit: 30,
@@ -51,7 +52,7 @@ const DEFAULTS = {
 
 let cfg = { ...DEFAULTS };
 /** 运行时可调参数（管理台持久化到 data/auto-trader-config.json） */
-const RUNTIME_CONFIG_KEYS = ['maxPositions', 'orderUsdt', 'leverage', 'pullbackLowPct', 'pullbackHighPct', 'orderTtlMin', 'tpPct', 'slPct', 'cancelGraceTicks'];
+const RUNTIME_CONFIG_KEYS = ['maxPositions', 'orderUsdt', 'leverage', 'pullbackLowPct', 'pullbackHighPct', 'orderTtlMin', 'tpPct', 'slPct', 'cancelGraceTicks', 'chasePct'];
 let runtimeConfig = {};
 try {
   runtimeConfig = JSON.parse(await readFile(RUNTIME_CONFIG_FILE, 'utf8'));
@@ -91,6 +92,7 @@ export async function startAutoTrader(opts = {}) {
     tpPct: Number(opts.tpPct ?? cfg.tpPct),
     slPct: Number(opts.slPct ?? cfg.slPct),
     cancelGraceTicks: Number(opts.cancelGraceTicks ?? cfg.cancelGraceTicks),
+    chasePct: Number(opts.chasePct ?? cfg.chasePct),
   };
   // 运行时持久化配置优先级最高（管理台修改后重启不丢失）——必须基于已合并 .env 的 base，不能用旧 cfg（会退回默认值）
   cfg = {
@@ -173,8 +175,8 @@ async function runTick() {
     // 币况追踪：记录本 tick 清单全部币种表现（保留 3 天，供管理台与宽限期判断）
     recordTickSymbols(now, actionItems, candidates);
 
-    // Step 3: 维护存量挂单（TTL + 是否还在关注列表）
-    await maintainPendingOrders(candidates, now);
+    // Step 3: 维护存量挂单（TTL + 清单去留 + 追价重挂）
+    await maintainPendingOrders(candidates, actionItems, now);
 
     // Step 4: 维护已成交持仓（止盈/止损/被剔除）
     await maintainOpenPositions(candidates, now);
@@ -332,10 +334,11 @@ function openPositionFromOrder(order, fillPrice, fillQty = order.qty) {
   logAutoTrade(order.symbol, 'fill', { orderId: order.id, price: fillPrice, qty, ...(partial ? { partial: true, orderQty: order.qty } : {}) });
 }
 
-async function maintainPendingOrders(candidates, now) {
+async function maintainPendingOrders(candidates, actionItems, now) {
   const active = queryActiveAutoOrders();
   if (!active.length) return;
   const candSet = new Set(candidates.map(c => c.symbol?.toUpperCase()));
+  const listSet = new Set((actionItems || []).map(c => c.symbol?.toUpperCase()));
 
   for (const order of active) {
     // 先同步成交状态（避免对已成交订单误撤单/重复挂单）
@@ -356,9 +359,28 @@ async function maintainPendingOrders(candidates, now) {
       if (!!order.smart_money_increased !== increased) {
         updateAutoOrder(order.id, { smartMoneyIncreased: increased });
       }
+      // 追价重挂：价格已远离挂单价（上涨超过 chasePct%），撤旧单按新价重挂，提高成交率
+      if ((cfg.chasePct ?? 0) > 0) {
+        try {
+          const mp = await getMarkPrice(order.symbol);
+          const cur = mp.lastPrice;
+          if (Number.isFinite(cur) && cur >= order.price * (1 + cfg.chasePct / 100)) {
+            logger.log?.(`  🏃 ${order.symbol} 价格远离（现价 ${cur} vs 挂单 ${order.price}），追价重挂`);
+            const r = await cancelLocalOrder(order, 'chase_reprice');
+            if (r === 'cancelled') await placeOrderForItem(match);
+            continue;
+          }
+        } catch (e) { logger.warn?.(`  ⚠ ${order.symbol} 追价检查失败: ${e.message}`); }
+      }
       continue;
     }
-    // 宽限期：剔出候选后连续缺席 cancelGraceTicks 个 tick 才撤，避免单 tick 波动导致频繁撤单重挂
+    // 仍在决策清单但暂非“立刻关注”候选（强度波动）：保留挂单，不计缺席
+    if (listSet.has(order.symbol)) {
+      if (Number(order.drop_miss) > 0) updateAutoOrder(order.id, { dropMiss: 0 });
+      logger.log?.(`  👀 ${order.symbol} 仍在清单（非候选），保留挂单`);
+      continue;
+    }
+    // 完全离开清单：宽限期——连续缺席 cancelGraceTicks 个 tick 才撤，避免单 tick 波动导致频繁撤单重挂
     const miss = (Number(order.drop_miss) || 0) + 1;
     if (miss < (cfg.cancelGraceTicks || 0)) {
       updateAutoOrder(order.id, { dropMiss: miss });
@@ -369,6 +391,7 @@ async function maintainPendingOrders(candidates, now) {
   }
 }
 
+/** 撤单；返回 'adopted'（撤前已成交转持仓）或 'cancelled' */
 async function cancelLocalOrder(order, reason) {
   logger.log?.(`  ❌ 撤单 ${order.symbol} id=${order.id} reason=${reason} price=${order.price}`);
   if (order.binance_id && !isDryRun()) {
@@ -380,19 +403,20 @@ async function cancelLocalOrder(order, reason) {
         const fillPrice = parseFloat(resp?.avgPrice) || order.price;
         openPositionFromOrder(order, fillPrice, filled);
         logger.log?.(`  ℹ ${order.symbol} 撤单前部分成交 ${filled}/${order.qty}，已按成交量收编为持仓`);
-        return;
+        return 'adopted';
       }
     } catch (e) {
       // 竞态保护：撤单失败可能是挂单刚成交，先确认状态再决定是否标 cancelled
       logger.warn?.(`  ⚠ 交易所撤单失败 ${order.symbol}: ${e.message}`);
       if (await syncOrderFill(order)) {
         logger.log?.(`  ℹ ${order.symbol} 撤单前已成交，转为持仓管理`);
-        return;
+        return 'adopted';
       }
     }
   }
   updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
   logAutoTrade(order.symbol, 'cancel', { orderId: order.id, reason, binanceId: order.binance_id });
+  return 'cancelled';
 }
 
 // ==================== 币况追踪 ====================
@@ -571,76 +595,84 @@ async function placeNewOrders(candidates, now) {
     if (!sym) continue;
     if (existing.has(sym)) continue;
 
-    try {
-      const klines = await getKlines(sym, cfg.klineInterval, cfg.klineLimit);
-      if (!klines?.length || klines.length < 10) {
-        logger.warn?.(`  ⚠ ${sym} K 线数据不足`);
-        continue;
-      }
-      const mark = await getMarkPrice(sym);
-      const curPrice = mark.lastPrice;
-      const closes = closesOf(klines);
-      const e7 = emaLast(closes, 7);
-      const e25 = emaLast(closes, 25);
-      const { price: rawEntry, ema } = pickEntryPrice({ e7, e25, curPrice });
-      const rules = await getSymbolRules(sym);
-      const entryPrice = alignNum(rawEntry, rules.tickSize);
-      const qty = calcQty(cfg.orderUsdt, entryPrice, rules);
-      const pullback = ((curPrice - entryPrice) / curPrice) * 100;
-      if (!qty) {
-        logger.warn?.(`  ⚠ ${sym} 数量不满足交易规则（最小名义值/步长），跳过`);
-        continue;
-      }
-
-      logger.log?.(`  📥 ${sym} 计划挂单: price=${entryPrice} (${ema}) · qty=${qty} · pullback=${pullback.toFixed(1)}% · cur=${curPrice}`);
-
-      const result = await placeLimitOrder({
-        symbol: sym,
-        side: 'BUY',
-        quantity: qty,
-        price: entryPrice,
-        // 双向持仓模式必须指定 positionSide，否则报 -4061
-        ...(dualSidePosition ? { positionSide: 'LONG' } : {}),
-      });
-
-      const orderId = randomUUID();
-      insertAutoOrder({
-        id: orderId,
-        symbol: sym,
-        side: 'BUY',
-        orderType: 'LIMIT',
-        price: entryPrice,
-        qty,
-        binanceId: result?.orderId != null ? String(result.orderId) : null,
-        emaUsed: ema,
-        pullbackPct: pullback,
-        status: 'pending',
-        smartMoneyIncreased: true,
-        inWatchlist: true,
-        createdAt: Date.now(),
-        ttlMin: cfg.orderTtlMin,
-        meta: { score: item.score, status: item.status, tradeView: item.tradeView, curPrice },
-      });
-      logAutoTrade(sym, 'place', {
-        orderId, price: entryPrice, qty, ema, pullback: pullback.toFixed(2),
-        score: item.score, status: item.status,
-      });
-
-      // dry-run 下直接模拟成交开仓；LIVE 下保持 pending，由后续 tick 的 syncOrderFill 检测真实成交
-      if (isDryRun()) {
-        openPositionFromOrder(
-          { id: orderId, symbol: sym, qty, price: entryPrice },
-          entryPrice,
-        );
-      }
-
+    if (await placeOrderForItem(item)) {
       existing.add(sym);
       placed += 1;
-    } catch (e) {
-      logger.warn?.(`  ⚠ ${item.symbol} 下单失败: ${e.message}`);
     }
   }
   logger.log?.(`  ➕ 新增挂单: ${placed}/${freeSlots}`);
+}
+
+/** 单个候选挂单（LIMIT BUY，回踩区间定价）；新开单与追价重挂共用。成功返回 true */
+async function placeOrderForItem(item) {
+  const sym = item.symbol?.toUpperCase();
+  try {
+    const klines = await getKlines(sym, cfg.klineInterval, cfg.klineLimit);
+    if (!klines?.length || klines.length < 10) {
+      logger.warn?.(`  ⚠ ${sym} K 线数据不足`);
+      return false;
+    }
+    const mark = await getMarkPrice(sym);
+    const curPrice = mark.lastPrice;
+    const closes = closesOf(klines);
+    const e7 = emaLast(closes, 7);
+    const e25 = emaLast(closes, 25);
+    const { price: rawEntry, ema } = pickEntryPrice({ e7, e25, curPrice });
+    const rules = await getSymbolRules(sym);
+    const entryPrice = alignNum(rawEntry, rules.tickSize);
+    const qty = calcQty(cfg.orderUsdt, entryPrice, rules);
+    const pullback = ((curPrice - entryPrice) / curPrice) * 100;
+    if (!qty) {
+      logger.warn?.(`  ⚠ ${sym} 数量不满足交易规则（最小名义值/步长），跳过`);
+      return false;
+    }
+
+    logger.log?.(`  📥 ${sym} 计划挂单: price=${entryPrice} (${ema}) · qty=${qty} · pullback=${pullback.toFixed(1)}% · cur=${curPrice}`);
+
+    const result = await placeLimitOrder({
+      symbol: sym,
+      side: 'BUY',
+      quantity: qty,
+      price: entryPrice,
+      // 双向持仓模式必须指定 positionSide，否则报 -4061
+      ...(dualSidePosition ? { positionSide: 'LONG' } : {}),
+    });
+
+    const orderId = randomUUID();
+    insertAutoOrder({
+      id: orderId,
+      symbol: sym,
+      side: 'BUY',
+      orderType: 'LIMIT',
+      price: entryPrice,
+      qty,
+      binanceId: result?.orderId != null ? String(result.orderId) : null,
+      emaUsed: ema,
+      pullbackPct: pullback,
+      status: 'pending',
+      smartMoneyIncreased: true,
+      inWatchlist: true,
+      createdAt: Date.now(),
+      ttlMin: cfg.orderTtlMin,
+      meta: { score: item.score, status: item.status, tradeView: item.tradeView, curPrice },
+    });
+    logAutoTrade(sym, 'place', {
+      orderId, price: entryPrice, qty, ema, pullback: pullback.toFixed(2),
+      score: item.score, status: item.status,
+    });
+
+    // dry-run 下直接模拟成交开仓；LIVE 下保持 pending，由后续 tick 的 syncOrderFill 检测真实成交
+    if (isDryRun()) {
+      openPositionFromOrder(
+        { id: orderId, symbol: sym, qty, price: entryPrice },
+        entryPrice,
+      );
+    }
+    return true;
+  } catch (e) {
+    logger.warn?.(`  ⚠ ${item.symbol} 下单失败: ${e.message}`);
+    return false;
+  }
 }
 
 function pickEntryPrice({ e7, e25, curPrice }) {
@@ -827,7 +859,7 @@ export async function updateRuntimeConfig(patch = {}) {
   for (const k of RUNTIME_CONFIG_KEYS) {
     if (patch[k] == null || patch[k] === '') continue;
     const v = Number(patch[k]);
-    const allowZero = k === 'cancelGraceTicks'; // 宽限期允许 0（立即撤单）
+    const allowZero = k === 'cancelGraceTicks' || k === 'chasePct'; // 宽限期允许 0（立即撤单）；追价阈值允许 0（关闭追价）
     if (!Number.isFinite(v) || v < 0 || (v === 0 && !allowZero)) return { ok: false, reason: `参数 ${k} 必须是正数（收到 ${patch[k]}）` };
     applied[k] = v;
   }

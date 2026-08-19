@@ -228,6 +228,7 @@ tr:hover td { background: #1c2128; }
         <label class="cfg-item"><span>止盈 TP %</span><input type="number" id="cfg-tpPct" min="0.5" step="0.5"></label>
         <label class="cfg-item"><span>止损 SL %</span><input type="number" id="cfg-slPct" min="0.5" step="0.5"></label>
         <label class="cfg-item" title="剔出清单后连续缺席几个 tick 才撤单，0=立即撤"><span>撤单宽限 (缺席 tick 数)</span><input type="number" id="cfg-cancelGraceTicks" min="0" step="1"></label>
+        <label class="cfg-item" title="现价高于挂单价超过该百分比时撤旧单按新回踩价重挂，提高成交率，0=关闭追价"><span>追价重挂阈值 %</span><input type="number" id="cfg-chasePct" min="0" step="1"></label>
       </div>
       <div style="margin-top:14px;display:flex;gap:8px;">
         <button class="btn btn-live" onclick="saveConfig()">💾 保存并生效</button>
@@ -470,8 +471,8 @@ function renderTrack(data) {
 }
 
 // ====== 策略参数配置 ======
-const CFG_FIELDS = ['orderUsdt', 'maxPositions', 'leverage', 'orderTtlMin', 'pullbackLowPct', 'pullbackHighPct', 'tpPct', 'slPct', 'cancelGraceTicks'];
-const CFG_DEFAULTS = { orderUsdt: 5, maxPositions: 5, leverage: 5, orderTtlMin: 180, pullbackLowPct: 20, pullbackHighPct: 30, tpPct: 15, slPct: 10, cancelGraceTicks: 2 };
+const CFG_FIELDS = ['orderUsdt', 'maxPositions', 'leverage', 'orderTtlMin', 'pullbackLowPct', 'pullbackHighPct', 'tpPct', 'slPct', 'cancelGraceTicks', 'chasePct'];
+const CFG_DEFAULTS = { orderUsdt: 5, maxPositions: 5, leverage: 5, orderTtlMin: 180, pullbackLowPct: 20, pullbackHighPct: 30, tpPct: 15, slPct: 10, cancelGraceTicks: 2, chasePct: 8 };
 let cfgLoaded = false;
 async function loadConfig(notify) {
   try {
@@ -487,10 +488,10 @@ async function saveConfig() {
   const patch = {};
   for (const k of CFG_FIELDS) {
     const v = parseFloat($('cfg-' + k).value);
-    if (!Number.isFinite(v) || v < 0 || (v === 0 && k !== 'cancelGraceTicks')) { banner('error', `参数 ${k} 必须是非负数`); return; }
+    if (!Number.isFinite(v) || v < 0 || (v === 0 && k !== 'cancelGraceTicks' && k !== 'chasePct')) { banner('error', `参数 ${k} 必须是非负数`); return; }
     patch[k] = v;
   }
-  if (!confirm(`确认保存策略参数？\n单笔 ${patch.orderUsdt}U · 最多 ${patch.maxPositions} 仓 · 杠杆 ${patch.leverage}x\n回踩 -${patch.pullbackLowPct}% ~ -${patch.pullbackHighPct}% · TTL ${patch.orderTtlMin}分 · 宽限 ${patch.cancelGraceTicks} tick\nTP +${patch.tpPct}% / SL -${patch.slPct}%`)) return;
+  if (!confirm(`确认保存策略参数？\n单笔 ${patch.orderUsdt}U · 最多 ${patch.maxPositions} 仓 · 杠杆 ${patch.leverage}x\n回踩 -${patch.pullbackLowPct}% ~ -${patch.pullbackHighPct}% · TTL ${patch.orderTtlMin}分 · 宽限 ${patch.cancelGraceTicks} tick\nTP +${patch.tpPct}% / SL -${patch.slPct}% · 追价重挂 ${patch.chasePct > 0 ? patch.chasePct + '%' : '关闭'}`)) return;
   const r = await post('/api/trade/config', patch);
   if (r.ok) banner('info', '✅ 配置已保存，下个 tick 生效');
   else banner('error', '❌ 保存失败: ' + (r.reason || r.error || '未知错误'));
