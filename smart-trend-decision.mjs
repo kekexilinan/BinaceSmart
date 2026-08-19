@@ -622,13 +622,6 @@ export function buildSmartTrendDecision({
 
   for (const row of merged.rows) {
     const { item, continuity } = buildItem(row, highlightPct, previousState, now, divergenceThreshold);
-    // 已持仓币种不推荐做多：将 trend_long 降级为 neutral_watch
-    if (item.tradeView === 'trend_long' && heldSymbols.has(item.symbol.toUpperCase())) {
-      item.tradeView = 'neutral_watch';
-      item.tradeViewLabel = VIEW_META.neutral_watch.label;
-      item.side = VIEW_META.neutral_watch.side;
-      item.baseGroup = VIEW_META.neutral_watch.group;
-    }
     item._stateEntry = makeStateEntry(item, continuity, now, item.group);
     items.push(item);
   }
