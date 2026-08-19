@@ -332,12 +332,12 @@ tr:hover td { background: #1c2128; }
         <tr><th>币种</th><th>方向</th><th style="text-align:right">1h 变化%</th><th style="text-align:right">大户比</th><th style="text-align:right">全网比</th><th style="text-align:right">大户/全网</th><th style="text-align:right">24h涨幅</th><th>评分</th></tr>
       </thead>
       <tbody>
-        <tr><td><strong>BANK</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+32.5%</td><td style="text-align:right">2.85</td><td style="text-align:right">1.12</td><td style="text-align:right">2.54</td><td style="text-align:right" class="positive">+32.1%</td><td><span style="color:#3fb950">●●●●○</span></td></tr>
-        <tr><td><strong>RE</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-35.2%</td><td style="text-align:right">0.42</td><td style="text-align:right">1.85</td><td style="text-align:right">0.23</td><td style="text-align:right" class="positive">+35.2%</td><td><span style="color:#f85149">●●●●●</span></td></tr>
-        <tr><td><strong>ZAMA</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-28.8%</td><td style="text-align:right">0.55</td><td style="text-align:right">1.72</td><td style="text-align:right">0.32</td><td style="text-align:right" class="positive">+18.9%</td><td><span style="color:#f85149">●●●●○</span></td></tr>
-        <tr><td><strong>ON</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+28.1%</td><td style="text-align:right">2.42</td><td style="text-align:right">1.25</td><td style="text-align:right">1.94</td><td style="text-align:right" class="positive">+22.8%</td><td><span style="color:#3fb950">●●●●○</span></td></tr>
-        <tr><td><strong>DODOX</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+22.3%</td><td style="text-align:right">2.15</td><td style="text-align:right">0.95</td><td style="text-align:right">2.26</td><td style="text-align:right" class="positive">+15.6%</td><td><span style="color:#3fb950">●●●○○</span></td></tr>
-        <tr><td><strong>UAI</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-22.1%</td><td style="text-align:right">0.65</td><td style="text-align:right">1.62</td><td style="text-align:right">0.40</td><td style="text-align:right" class="positive">+12.5%</td><td><span style="color:#f85149">●●●○○</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="BANKUSDT">BANK</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+32.5%</td><td style="text-align:right">2.85</td><td style="text-align:right">1.12</td><td style="text-align:right">2.54</td><td style="text-align:right" class="positive">+32.1%</td><td><span style="color:#3fb950">●●●●○</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="REUSDT">RE</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-35.2%</td><td style="text-align:right">0.42</td><td style="text-align:right">1.85</td><td style="text-align:right">0.23</td><td style="text-align:right" class="positive">+35.2%</td><td><span style="color:#f85149">●●●●●</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="ZAMAUSDT">ZAMA</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-28.8%</td><td style="text-align:right">0.55</td><td style="text-align:right">1.72</td><td style="text-align:right">0.32</td><td style="text-align:right" class="positive">+18.9%</td><td><span style="color:#f85149">●●●●○</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="ONUSDT">ON</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+28.1%</td><td style="text-align:right">2.42</td><td style="text-align:right">1.25</td><td style="text-align:right">1.94</td><td style="text-align:right" class="positive">+22.8%</td><td><span style="color:#3fb950">●●●●○</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="DODOXUSDT">DODOX</strong></td><td><span class="pill pill-long">做多</span></td><td style="text-align:right" class="positive">+22.3%</td><td style="text-align:right">2.15</td><td style="text-align:right">0.95</td><td style="text-align:right">2.26</td><td style="text-align:right" class="positive">+15.6%</td><td><span style="color:#3fb950">●●●○○</span></td></tr>
+        <tr><td><strong class="symbol-link" data-symbol="UAIUSDT">UAI</strong></td><td><span class="pill pill-short">做空</span></td><td style="text-align:right" class="negative">-22.1%</td><td style="text-align:right">0.65</td><td style="text-align:right">1.62</td><td style="text-align:right">0.40</td><td style="text-align:right" class="positive">+12.5%</td><td><span style="color:#f85149">●●●○○</span></td></tr>
       </tbody>
     </table>
   </div>
@@ -501,7 +501,7 @@ function renderBoard(category) {
     const ratioChg = (r.ratio_delta_1h || 0).toFixed(2);
     const ratioColor = r.ratio_delta_1h >= 0 ? '#3fb950' : '#f85149';
     return `<tr>
-      <td style="font-weight:600">${r.symbol.replace('USDT','')}</td>
+      <td style="font-weight:600"><span class="symbol-link" data-symbol="${r.symbol}" title="点击查看多空比趋势">${r.symbol.replace('USDT','')}</span></td>
       <td>$${r.price}</td>
       <td style="color:${chgColor}">${chg}%</td>
       <td>${(r.top_ratio || 0).toFixed(4)}</td>
@@ -733,14 +733,14 @@ async function loadDecision() {
   const verdictEl = document.querySelector('.stat-card:first-child .stat-value');
   if (verdictEl && d.verdict) verdictEl.textContent = d.verdict;
 
-  // 高亮当前趋势图已选中的币种
+  // 高亮当前趋势图已选中的币种（页面所有可点击币种）
   const cur = getSelectedSymbol();
-  document.querySelectorAll('#decisionGrid .symbol-link').forEach(el => {
+  document.querySelectorAll('.symbol-link').forEach(el => {
     el.classList.toggle('symbol-active', el.dataset.symbol === cur);
   });
 }
 
-// 点击操作清单币种 → 切换单币多空比趋势图并滚动到图表区
+// 点击任意币种链接 → 切换单币多空比趋势图并滚动到图表区
 function switchSymbolTo(symbol) {
   if (!symbol) return;
   const sel = document.getElementById('symbolSelect');
@@ -749,20 +749,19 @@ function switchSymbolTo(symbol) {
   if (input) input.value = symbol.replace('USDT', '');
   localStorage.setItem('dashSymbol', symbol);
   loadSymbolTrend(symbol);
-  document.querySelectorAll('#decisionGrid .symbol-link').forEach(el => {
+  document.querySelectorAll('.symbol-link').forEach(el => {
     el.classList.toggle('symbol-active', el.dataset.symbol === symbol);
   });
   const chartSection = document.getElementById('ratioChart')?.closest('.section');
   if (chartSection) chartSection.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
-const decisionGrid = document.getElementById('decisionGrid');
-if (decisionGrid) {
-  decisionGrid.addEventListener('click', (e) => {
-    const link = e.target.closest('.symbol-link');
-    if (link) switchSymbolTo(link.dataset.symbol);
-  });
-}
+// 全局点击委托：操作清单/榜单/异动排行/固定监控 chips 的币种均可点击切换
+document.addEventListener('click', (e) => {
+  if (e.target.closest('.pinned-remove')) return; // 固定监控的 × 删除按钮不触发切换
+  const link = e.target.closest('.symbol-link');
+  if (link) switchSymbolTo(link.dataset.symbol);
+});
 
 async function loadAll() {
   const symbol = getSelectedSymbol();
@@ -825,7 +824,7 @@ function renderPinnedSymbols() {
     return;
   }
   listEl.innerHTML = pinnedSymbols.map(s =>
-    '<span style="display:inline-flex;align-items:center;gap:6px;background:#21262d;border:1px solid #30363d;border-radius:20px;padding:3px 8px 3px 12px;font-size:12px;color:#e6edf3;">' +
+    '<span class="symbol-link" data-symbol="' + s + '" title="点击查看多空比趋势" style="display:inline-flex;align-items:center;gap:6px;background:#21262d;border:1px solid #30363d;border-radius:20px;padding:3px 8px 3px 12px;font-size:12px;color:#e6edf3;border-bottom:1px solid #30363d;">' +
     s.replace('USDT','') +
     '<button class="pinned-remove" data-symbol="' + s + '" title="移除" style="background:none;border:none;color:#f85149;cursor:pointer;font-size:14px;line-height:1;padding:0;">×</button>' +
     '</span>'
