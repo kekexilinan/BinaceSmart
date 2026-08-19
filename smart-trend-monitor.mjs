@@ -1198,11 +1198,11 @@ export async function runSmartTrendPush({ force = false } = {}) {
       try {
         const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct, heldSymbols });
         await deps.sendDecisionCard(
-          `🎯 聪明钱操作清单 · ${decisionPush.summary.verdict}`,
+          `🎯 操作清单 · ${decisionPush.summary.verdict}`,
           elements,
           decisionPush.summary.template,
         );
-        console.log(`  ✓ 聪明钱操作清单已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length}`);
+        console.log(`  ✓ 操作清单已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length}`);
       } catch (e) {
         console.warn(`  ⚠ 聪明钱决策摘要推送失败: ${e.message}`);
       }
