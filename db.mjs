@@ -130,14 +130,32 @@ export async function initDB() {
     )
   `);
 
+  // 币况追踪：每个 tick 记录决策清单币种表现（供管理台“币况追踪”表 + 撤单宽限期判断）
+  db.run(`
+    CREATE TABLE IF NOT EXISTS tick_symbol_log (
+      id              INTEGER PRIMARY KEY AUTOINCREMENT,
+      tick_ts         INTEGER NOT NULL,
+      symbol          TEXT NOT NULL,
+      side            TEXT DEFAULT 'long',
+      score           REAL,
+      status          TEXT,
+      status_label    TEXT,
+      is_candidate    INTEGER DEFAULT 0
+    )
+  `);
+
   // 索引
   db.run('CREATE INDEX IF NOT EXISTS idx_sentiment_ts ON market_sentiment(timestamp)');
+  // 存量 DB 迁移：auto_orders 补 drop_miss 列（剔出候选的连续缺席 tick 数，撤单宽限期用）
+  try { db.run('ALTER TABLE auto_orders ADD COLUMN drop_miss INTEGER DEFAULT 0'); } catch { /* 列已存在 */ }
   db.run('CREATE INDEX IF NOT EXISTS idx_symbol_ts ON symbol_snapshot(timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_symbol_sym_ts ON symbol_snapshot(symbol, timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_decision_ts ON decision_snapshot(timestamp)');
   db.run('CREATE INDEX IF NOT EXISTS idx_auto_orders_status ON auto_orders(status)');
   db.run('CREATE INDEX IF NOT EXISTS idx_auto_positions_status ON auto_positions(status)');
   db.run('CREATE INDEX IF NOT EXISTS idx_auto_trades_ts ON auto_trades_log(ts)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_ts ON tick_symbol_log(tick_ts)');
+  db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_sym ON tick_symbol_log(symbol, tick_ts)');
 
   // 定期持久化
   saveTimer = setInterval(() => persistDB(), SAVE_INTERVAL_MS);
@@ -359,7 +377,7 @@ export function updateAutoOrder(id, patch) {
   const allowed = [
     'status', 'binance_id', 'ema_used', 'pullback_pct',
     'smart_money_increased', 'in_watchlist', 'filled_at', 'cancelled_at',
-    'price', 'qty', 'meta_json',
+    'price', 'qty', 'meta_json', 'drop_miss',
   ];
   for (const k of Object.keys(patch)) {
     const col = k.replace(/([A-Z])/g, '_$1').toLowerCase();
@@ -453,6 +471,57 @@ export function logAutoTrade(symbol, action, detail) {
   db.run(`INSERT INTO auto_trades_log (ts, symbol, action, detail) VALUES (?, ?, ?, ?)`, [
     Date.now(), symbol || null, action || '', typeof detail === 'object' ? JSON.stringify(detail) : (detail || ''),
   ]);
+}
+
+// ===== 币况追踪（tick_symbol_log） =====
+
+/** 写入本 tick 的清单币种表现，并清理超过保留天数的旧记录 */
+export function insertTickSymbols(tickTs, rows, keepDays = 3) {
+  if (!db || !tickTs) return;
+  for (const r of rows || []) {
+    db.run(`INSERT INTO tick_symbol_log (tick_ts, symbol, side, score, status, status_label, is_candidate) VALUES (?, ?, ?, ?, ?, ?, ?)`, [
+      tickTs, String(r.symbol || '').toUpperCase(), r.side || 'long',
+      r.score ?? null, r.status || null, r.statusLabel || null, r.isCandidate ? 1 : 0,
+    ]);
+  }
+  db.run(`DELETE FROM tick_symbol_log WHERE tick_ts < ?`, [tickTs - keepDays * 86400_000]);
+  persistDB();
+}
+
+/** 每个 tick 的时间戳（去重降序），用于 JS 侧算连续出现/缺席 */
+export function queryTickTimes({ days = 3, limit = 200 } = {}) {
+  if (!db) return [];
+  const results = db.exec(`SELECT DISTINCT tick_ts FROM tick_symbol_log WHERE tick_ts > ? ORDER BY tick_ts DESC LIMIT ?`, [Date.now() - days * 86400_000, Number(limit) | 0]);
+  return results.length ? results[0].values.map(v => v[0]) : [];
+}
+
+/** 近 N 天币种汇总（总次数/候选次数/最后出现/最新得分状态），按最后出现时间倒序 */
+export function querySymbolTickStats({ days = 3 } = {}) {
+  if (!db) return [];
+  const cutoff = Date.now() - days * 86400_000;
+  const sql = `
+    SELECT t.symbol,
+           COUNT(*) AS appearances,
+           SUM(t.is_candidate) AS candidate_count,
+           MAX(t.tick_ts) AS last_seen,
+           t.score AS last_score, t.status AS last_status, t.status_label AS last_status_label,
+           t.side AS last_side, t.is_candidate AS last_is_candidate
+    FROM tick_symbol_log t
+    JOIN (SELECT symbol AS s, MAX(tick_ts) AS mts FROM tick_symbol_log WHERE tick_ts > ? GROUP BY symbol) l
+      ON t.symbol = l.s AND t.tick_ts = l.mts
+    WHERE t.tick_ts > ?
+    GROUP BY t.symbol
+    ORDER BY last_seen DESC
+  `;
+  const results = db.exec(sql, [cutoff, cutoff]);
+  return results.length ? rowsToObjects(results[0]) : [];
+}
+
+/** 某币种近 N 天出现过的 tick 时间戳（降序） */
+export function querySymbolSeenTicks(symbol, { days = 3 } = {}) {
+  if (!db || !symbol) return [];
+  const results = db.exec(`SELECT DISTINCT tick_ts FROM tick_symbol_log WHERE symbol = ? AND tick_ts > ? ORDER BY tick_ts DESC`, [String(symbol).toUpperCase(), Date.now() - days * 86400_000]);
+  return results.length ? results[0].values.map(v => v[0]) : [];
 }
 
 export function queryAutoTradeLogs({ limit = 200, symbol } = {}) {

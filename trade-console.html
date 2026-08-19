@@ -160,6 +160,7 @@ tr:hover td { background: #1c2128; }
     <div class="tab active" data-tab="orders" onclick="switchTab('orders')">挂单 <span class="count" id="cntOrders">0</span></div>
     <div class="tab" data-tab="positions" onclick="switchTab('positions')">持仓 <span class="count" id="cntPositions">0</span></div>
     <div class="tab" data-tab="logs" onclick="switchTab('logs')">操作日志</div>
+    <div class="tab" data-tab="track" onclick="switchTab('track')">📈 币况追踪</div>
     <div class="tab" data-tab="config" onclick="switchTab('config')">⚙ 策略参数</div>
   </div>
 
@@ -197,6 +198,19 @@ tr:hover td { background: #1c2128; }
     </div>
   </div>
 
+  <div id="tab-track" style="display:none">
+    <div style="color:#8b949e;font-size:12px;margin-bottom:10px;" id="trackMeta">每个 :50 tick 记录决策清单币种表现 · 保留近 3 天 · 随 tick 自动更新</div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr>
+          <th>币种</th><th>最新状态</th><th style="text-align:right">得分</th><th style="text-align:right">出现次数</th><th style="text-align:right">连续出现</th><th style="text-align:right">缺席 tick</th><th>建议操作</th><th>最后出现</th>
+        </tr></thead>
+        <tbody id="trackBody"></tbody>
+      </table>
+      <div class="empty" id="trackEmpty" style="display:none">暂无追踪数据（下个 :50 tick 后开始积累）</div>
+    </div>
+  </div>
+
   <div id="tab-config" style="display:none">
     <div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:16px;">
       <div style="color:#8b949e;font-size:12px;margin-bottom:12px;">修改后下个 tick（每小时 :50）生效 · 保存到服务器 data/auto-trader-config.json，重启不丢失 · TP/SL 仅对之后新开仓位生效</div>
@@ -209,6 +223,7 @@ tr:hover td { background: #1c2128; }
         <label class="cfg-item"><span>回踩上限 %（如 30 = -30%）</span><input type="number" id="cfg-pullbackHighPct" min="1" step="1"></label>
         <label class="cfg-item"><span>止盈 TP %</span><input type="number" id="cfg-tpPct" min="0.5" step="0.5"></label>
         <label class="cfg-item"><span>止损 SL %</span><input type="number" id="cfg-slPct" min="0.5" step="0.5"></label>
+        <label class="cfg-item" title="剔出清单后连续缺席几个 tick 才撤单，0=立即撤"><span>撤单宽限 (缺席 tick 数)</span><input type="number" id="cfg-cancelGraceTicks" min="0" step="1"></label>
       </div>
       <div style="margin-top:14px;display:flex;gap:8px;">
         <button class="btn btn-live" onclick="saveConfig()">💾 保存并生效</button>
@@ -307,10 +322,10 @@ function fmtNum(v, digits = 4) {
 async function refreshAll() {
   if (!authed) return;
   try {
-    const [status, orders, positions, logs] = await Promise.all([
-      api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'),
+    const [status, orders, positions, logs, track] = await Promise.all([
+      api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'), api('/api/trade/symbol-track'),
     ]);
-    renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs);
+    renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs); renderTrack(track);
     $('lastUpdate').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
   } catch (e) {
     if (e.message !== 'unauthorized') banner('error', '刷新失败: ' + e.message);
@@ -413,16 +428,51 @@ function renderLogs(logs) {
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  ['orders', 'positions', 'logs', 'config'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+  ['orders', 'positions', 'logs', 'track', 'config'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+}
+
+// ====== 币况追踪 ======
+const ADVICE_STYLE = {
+  strong: 'background:#1b433233;border:1px solid #238636;color:#3fb950',
+  watch: 'background:#0c2d6b33;border:1px solid #1f6feb;color:#58a6ff',
+  track: 'background:#2d220033;border:1px solid #9e6a03;color:#d29922',
+  absent: 'background:#21262d;border:1px solid #30363d;color:#8b949e',
+  faded: 'background:#3d151533;border:1px solid #f8514955;color:#f85149',
+};
+const STATUS_LABEL = { strengthened: '加强', continued: '延续', new: '新出现', weakened: '减弱', reversed: '反转', invalidated: '失效' };
+function renderTrack(data) {
+  const body = $('trackBody');
+  const list = (data && data.list) || [];
+  $('trackEmpty').style.display = list.length ? 'none' : 'block';
+  if (data) $('trackMeta').textContent = `近 ${data.days || 3} 天 · 已记录 ${data.tickCount || 0} 个 tick · 最新 tick ${fmtTime(data.latestTick)} · 每小时 :50 更新`;
+  body.innerHTML = list.map(r => {
+    const sym = r.symbol.replace('USDT', '');
+    const stLabel = STATUS_LABEL[r.lastStatus] || r.lastStatusLabel || r.lastStatus || '--';
+    const stColor = r.lastIsCandidate ? '#3fb950' : '#8b949e';
+    const streakCell = r.streak > 0 ? `<span class="positive">${'●'.repeat(Math.min(r.streak, 8))}${r.streak > 8 ? '+' : ''} ${r.streak}</span>` : '<span class="muted">--</span>';
+    const absentCell = r.streak > 0 ? '<span class="muted">0</span>' : `<span class="${r.absent >= 4 ? 'negative' : ''}">${r.absent}</span>`;
+    const adv = r.advice || {};
+    return `<tr>
+      <td style="font-weight:600">${sym}</td>
+      <td><span style="color:${stColor}">${stLabel}</span>${r.lastIsCandidate ? ' <span class="pill pill-live" style="font-size:10px">候选</span>' : ''}</td>
+      <td style="text-align:right">${r.lastScore ?? '--'}</td>
+      <td style="text-align:right">${r.appearances} <span class="muted">(候选 ${r.candidateCount})</span></td>
+      <td style="text-align:right">${streakCell}</td>
+      <td style="text-align:right">${absentCell}</td>
+      <td><span style="display:inline-block;padding:2px 8px;border-radius:10px;font-size:11px;${ADVICE_STYLE[adv.level] || ADVICE_STYLE.absent}">${adv.text || '--'}</span></td>
+      <td class="muted">${fmtTime(r.lastSeen)}</td>
+    </tr>`;
+  }).join('');
 }
 
 // ====== 策略参数配置 ======
-const CFG_FIELDS = ['orderUsdt', 'maxPositions', 'leverage', 'orderTtlMin', 'pullbackLowPct', 'pullbackHighPct', 'tpPct', 'slPct'];
+const CFG_FIELDS = ['orderUsdt', 'maxPositions', 'leverage', 'orderTtlMin', 'pullbackLowPct', 'pullbackHighPct', 'tpPct', 'slPct', 'cancelGraceTicks'];
+const CFG_DEFAULTS = { orderUsdt: 5, maxPositions: 5, leverage: 5, orderTtlMin: 180, pullbackLowPct: 20, pullbackHighPct: 30, tpPct: 15, slPct: 10, cancelGraceTicks: 2 };
 let cfgLoaded = false;
 async function loadConfig(notify) {
   try {
     const c = await api('/api/trade/config');
-    CFG_FIELDS.forEach(k => { const el = $('cfg-' + k); if (el && c[k] != null) el.value = c[k]; });
+    CFG_FIELDS.forEach(k => { const el = $('cfg-' + k); if (el) el.value = c[k] != null ? c[k] : CFG_DEFAULTS[k]; });
     cfgLoaded = true;
     if (notify) banner('info', '✅ 已加载服务器最新配置');
   } catch (e) {
@@ -433,10 +483,10 @@ async function saveConfig() {
   const patch = {};
   for (const k of CFG_FIELDS) {
     const v = parseFloat($('cfg-' + k).value);
-    if (!Number.isFinite(v) || v <= 0) { banner('error', `参数 ${k} 必须是正数`); return; }
+    if (!Number.isFinite(v) || v < 0 || (v === 0 && k !== 'cancelGraceTicks')) { banner('error', `参数 ${k} 必须是非负数`); return; }
     patch[k] = v;
   }
-  if (!confirm(`确认保存策略参数？\n单笔 ${patch.orderUsdt}U · 最多 ${patch.maxPositions} 仓 · 杠杆 ${patch.leverage}x\n回踩 -${patch.pullbackLowPct}% ~ -${patch.pullbackHighPct}% · TTL ${patch.orderTtlMin}分\nTP +${patch.tpPct}% / SL -${patch.slPct}%`)) return;
+  if (!confirm(`确认保存策略参数？\n单笔 ${patch.orderUsdt}U · 最多 ${patch.maxPositions} 仓 · 杠杆 ${patch.leverage}x\n回踩 -${patch.pullbackLowPct}% ~ -${patch.pullbackHighPct}% · TTL ${patch.orderTtlMin}分 · 宽限 ${patch.cancelGraceTicks} tick\nTP +${patch.tpPct}% / SL -${patch.slPct}%`)) return;
   const r = await post('/api/trade/config', patch);
   if (r.ok) banner('info', '✅ 配置已保存，下个 tick 生效');
   else banner('error', '❌ 保存失败: ' + (r.reason || r.error || '未知错误'));

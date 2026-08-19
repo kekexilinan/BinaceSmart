@@ -27,7 +27,7 @@ import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHea
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
-import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs, getRuntimeConfig, updateRuntimeConfig } from './auto-trader.mjs';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs, getRuntimeConfig, updateRuntimeConfig, getSymbolTrackStats } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -2252,6 +2252,19 @@ async function getFuturesSymbols() {
     }
     res.writeHead(200, tradeHeaders);
     res.end(JSON.stringify(getRuntimeConfig()));
+    return;
+  }
+  if (url.pathname === '/api/trade/symbol-track' && req.method === 'GET') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
+    try {
+      const days = Math.min(7, Math.max(1, Number(url.searchParams.get('days') || 3)));
+      res.writeHead(200, tradeHeaders);
+      res.end(JSON.stringify(getSymbolTrackStats(days)));
+    } catch (e) {
+      res.writeHead(500, tradeHeaders); res.end(JSON.stringify({ error: e.message }));
+    }
     return;
   }
   if (url.pathname.startsWith('/api/trade/') && req.method === 'POST') {

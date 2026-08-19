@@ -18,6 +18,7 @@ import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
   insertAutoPosition, updateAutoPosition, queryOpenPositions,
   logAutoTrade, queryLatestSnapshot, queryLatestDecision, queryAutoTradeLogs,
+  insertTickSymbols, querySymbolTickStats, queryTickTimes, querySymbolSeenTicks,
 } from './db.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,7 @@ const DEFAULTS = {
   orderTtlMin: 180,
   tpPct: 15,
   slPct: 10,
+  cancelGraceTicks: 2,
   tickEveryMin: 50,
   klineInterval: '1h',
   klineLimit: 30,
@@ -48,7 +50,7 @@ const DEFAULTS = {
 
 let cfg = { ...DEFAULTS };
 /** 运行时可调参数（管理台持久化到 data/auto-trader-config.json） */
-const RUNTIME_CONFIG_KEYS = ['maxPositions', 'orderUsdt', 'leverage', 'pullbackLowPct', 'pullbackHighPct', 'orderTtlMin', 'tpPct', 'slPct'];
+const RUNTIME_CONFIG_KEYS = ['maxPositions', 'orderUsdt', 'leverage', 'pullbackLowPct', 'pullbackHighPct', 'orderTtlMin', 'tpPct', 'slPct', 'cancelGraceTicks'];
 let runtimeConfig = {};
 try {
   runtimeConfig = JSON.parse(await readFile(RUNTIME_CONFIG_FILE, 'utf8'));
@@ -87,6 +89,7 @@ export async function startAutoTrader(opts = {}) {
     orderTtlMin: Number(opts.orderTtlMin ?? cfg.orderTtlMin),
     tpPct: Number(opts.tpPct ?? cfg.tpPct),
     slPct: Number(opts.slPct ?? cfg.slPct),
+    cancelGraceTicks: Number(opts.cancelGraceTicks ?? cfg.cancelGraceTicks),
   };
   // 运行时持久化配置优先级最高（管理台修改后重启不丢失）——必须基于已合并 .env 的 base，不能用旧 cfg（会退回默认值）
   cfg = {
@@ -165,6 +168,9 @@ async function runTick() {
     // Step 2: 立即关注的候选（urgency=high + side=long）
     const candidates = actionItems.filter(isValidSignal);
     logger.log?.(`  🎯 立刻关注(做多 high): ${candidates.length} 个 ${candidates.length ? candidates.map(c => c.symbol).join(',') : ''}`);
+
+    // 币况追踪：记录本 tick 清单全部币种表现（保留 3 天，供管理台与宽限期判断）
+    recordTickSymbols(now, actionItems, candidates);
 
     // Step 3: 维护存量挂单（TTL + 是否还在关注列表）
     await maintainPendingOrders(candidates, now);
@@ -342,9 +348,17 @@ async function maintainPendingOrders(candidates, now) {
     const match = candidates.find(c => c.symbol?.toUpperCase() === order.symbol);
     const stillIn = match && candSet.has(order.symbol);
     if (!stillIn) {
-      await cancelLocalOrder(order, 'dropped_from_watchlist');
+      // 宽限期：剔出候选后连续缺席 cancelGraceTicks 个 tick 才撤，避免单 tick 波动导致频繁撤单重挂
+      const miss = (Number(order.drop_miss) || 0) + 1;
+      if (miss < (cfg.cancelGraceTicks || 0)) {
+        updateAutoOrder(order.id, { dropMiss: miss });
+        logger.log?.(`  ⏳ ${order.symbol} 暂离清单（${miss}/${cfg.cancelGraceTicks} tick），保留挂单观察`);
+        continue;
+      }
+      await cancelLocalOrder(order, `dropped_${miss}ticks`);
       continue;
     }
+    if (Number(order.drop_miss) > 0) updateAutoOrder(order.id, { dropMiss: 0 }); // 回归清单，缺席计数清零
     // 更新"是否仍在加仓"标记
     const delta = Number(match?.ratioDeltaPct ?? NaN);
     const increased = !Number.isFinite(delta) || delta > 0;
@@ -378,6 +392,71 @@ async function cancelLocalOrder(order, reason) {
   }
   updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
   logAutoTrade(order.symbol, 'cancel', { orderId: order.id, reason, binanceId: order.binance_id });
+}
+
+// ==================== 币况追踪 ====================
+
+/** 记录本 tick 决策清单币种表现（含未入选候选的，供连续出现/缺席统计） */
+function recordTickSymbols(tickTs, actionItems, candidates) {
+  try {
+    const candSet = new Set(candidates.map(c => c.symbol?.toUpperCase()));
+    const rows = (actionItems || [])
+      .filter(it => it?.symbol)
+      .map(it => ({
+        symbol: it.symbol,
+        side: it.side || 'long',
+        score: Number(it.score ?? 0),
+        status: it.status || '',
+        statusLabel: it.statusLabel || '',
+        isCandidate: candSet.has(String(it.symbol).toUpperCase()),
+      }));
+    insertTickSymbols(tickTs, rows);
+  } catch (e) { logger.warn?.(`  ⚠ 币况追踪记录失败（不影响交易）: ${e.message}`); }
+}
+
+/** 币况追踪统计（供管理台）：汇总 + 连续出现/缺席 tick + 建议操作 */
+export function getSymbolTrackStats(days = 3) {
+  const stats = querySymbolTickStats({ days });
+  const tickTimes = queryTickTimes({ days }); // 降序
+  const latestTick = tickTimes[0] || 0;
+  const seenSetOf = (sym) => new Set(querySymbolSeenTicks(sym, { days }));
+
+  const list = stats.map(s => {
+    const seen = seenSetOf(s.symbol);
+    // 连续出现：从最新 tick 往回数
+    let streak = 0;
+    for (const t of tickTimes) { if (seen.has(t)) streak++; else break; }
+    // 缺席：最新 tick 未出现时，连续缺席的 tick 数
+    let absent = 0;
+    if (streak === 0) {
+      for (const t of tickTimes) { if (!seen.has(t)) absent++; else break; }
+    }
+    return {
+      symbol: s.symbol,
+      appearances: s.appearances,
+      candidateCount: s.candidate_count,
+      lastSeen: s.last_seen,
+      lastScore: s.last_score,
+      lastStatus: s.last_status,
+      lastStatusLabel: s.last_status_label,
+      lastSide: s.last_side,
+      lastIsCandidate: !!s.last_is_candidate,
+      streak,
+      absent,
+      advice: adviceOf({ streak, absent, lastIsCandidate: !!s.last_is_candidate, lastScore: Number(s.last_score) || 0 }),
+    };
+  });
+  return { latestTick, tickCount: tickTimes.length, days, list };
+}
+
+/** 建议操作规则：连续出现越多信号越强；缺席越久越应放弃 */
+function adviceOf({ streak, absent, lastIsCandidate, lastScore }) {
+  if (streak >= 3 && lastIsCandidate) return { level: 'strong', text: '强信号·持续做多关注' };
+  if (streak >= 2 && lastIsCandidate) return { level: 'watch', text: '关注·可挂单' };
+  if (streak >= 1) return { level: 'track', text: lastIsCandidate ? '新信号·观察' : '强度不足·仅观察' };
+  if (absent === 1) return { level: 'absent', text: '缺席 1 tick·宽限观察' };
+  if (absent <= 3) return { level: 'absent', text: `缺席 ${absent} tick·等待回归` };
+  return { level: 'faded', text: `缺席 ${absent} tick·信号消退` };
 }
 
 // ==================== 维护：持仓 ====================
@@ -609,6 +688,7 @@ export function getAutoTraderStatus() {
     ttlMin: cfg.orderTtlMin,
     tpPct: cfg.tpPct,
     slPct: cfg.slPct,
+    cancelGraceTicks: cfg.cancelGraceTicks,
     activeOrders: queryActiveAutoOrders().length,
     openPositions: queryOpenPositions().length,
     running,
@@ -720,7 +800,8 @@ export async function updateRuntimeConfig(patch = {}) {
   for (const k of RUNTIME_CONFIG_KEYS) {
     if (patch[k] == null || patch[k] === '') continue;
     const v = Number(patch[k]);
-    if (!Number.isFinite(v) || v <= 0) return { ok: false, reason: `参数 ${k} 必须是正数（收到 ${patch[k]}）` };
+    const allowZero = k === 'cancelGraceTicks'; // 宽限期允许 0（立即撤单）
+    if (!Number.isFinite(v) || v < 0 || (v === 0 && !allowZero)) return { ok: false, reason: `参数 ${k} 必须是正数（收到 ${patch[k]}）` };
     applied[k] = v;
   }
   if (!Object.keys(applied).length) return { ok: false, reason: '没有有效参数' };
