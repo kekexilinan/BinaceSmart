@@ -13,7 +13,7 @@ import { resolveActionGuide } from './smart-trend-decision.mjs';
 import {
   configureBinanceClient, getKlines, getMarkPrice,
   placeLimitOrder, placeMarketOrder, cancelOrder, getOrder, getPositionMode, isDryRun,
-  getExchangeInfo, getBalance, getAccountPositions,
+  getExchangeInfo, getBalance, getAccountPositions, setLeverage, setMarginType,
 } from './binance-client.mjs';
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
@@ -619,6 +619,7 @@ async function placeOrderForItem(item) {
     const e25 = emaLast(closes, 25);
     const { price: rawEntry, ema } = pickEntryPrice({ e7, e25, curPrice });
     const rules = await getSymbolRules(sym);
+    await applySymbolRiskSettings(sym);
     const entryPrice = alignNum(rawEntry, rules.tickSize);
     const qty = calcQty(cfg.orderUsdt, entryPrice, rules);
     const pullback = ((curPrice - entryPrice) / curPrice) * 100;
@@ -701,6 +702,29 @@ function alignNum(v, step) {
   if (!step || !(step > 0) || !Number.isFinite(v)) return v;
   const decimals = step >= 1 ? 0 : Math.min(8, Math.round(-Math.log10(step)));
   return Number((Math.floor(v / step + 1e-9) * step).toFixed(decimals));
+}
+
+// ==================== 杠杆/保证金模式 ====================
+
+/** 已设置过杠杆+逐仓的币种（进程内缓存，避免每次下单重复调用） */
+const riskSettingsApplied = new Set();
+
+/** 下单前确保币种杠杆/逐仓与配置一致；失败不阻断下单（仅告警，避免错过信号） */
+async function applySymbolRiskSettings(sym) {
+  if (cfg.market !== 'futures' || isDryRun() || riskSettingsApplied.has(sym)) return;
+  try {
+    await setLeverage(sym, cfg.leverage);
+    try {
+      await setMarginType(sym, 'ISOLATED');
+    } catch (e) {
+      // 有持仓时币安不允许切换保证金模式（-4059）：仅告警不阻断
+      logger.warn?.(`  ⚠ ${sym} 逐仓设置失败（可能已有持仓）: ${e.message}`);
+    }
+    riskSettingsApplied.add(sym);
+    logger.log?.(`  🔧 ${sym} 已设置 ${cfg.leverage}x 杠杆 + 逐仓`);
+  } catch (e) {
+    logger.warn?.(`  ⚠ ${sym} 杠杆设置失败: ${e.message}`);
+  }
 }
 
 // ==================== 交易规则缓存（exchangeInfo） ====================

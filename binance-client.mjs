@@ -217,6 +217,31 @@ export async function getPositionMode() {
   return request('GET', '/fapi/v1/positionSide/dual', {}, { signed: true });
 }
 
+/** 设置合约杠杆（币种级，对该币后续订单及已有持仓生效） */
+export async function setLeverage(symbol, leverage) {
+  if (_market !== 'futures') return { dryRun: true };
+  if (_dryRun) {
+    _logger.log?.(`  [DRY-RUN] setLeverage ${symbol} ${leverage}x`);
+    return { dryRun: true, symbol, leverage };
+  }
+  return request('POST', '/fapi/v1/leverage', { symbol: symbol.toUpperCase(), leverage }, { signed: true });
+}
+
+/** 设置保证金模式（ISOLATED 逐仓 / CROSSED 全仓）；已是目标模式时币安返回 -4046，视为成功 */
+export async function setMarginType(symbol, marginType = 'ISOLATED') {
+  if (_market !== 'futures') return { dryRun: true };
+  if (_dryRun) {
+    _logger.log?.(`  [DRY-RUN] setMarginType ${symbol} ${marginType}`);
+    return { dryRun: true, symbol, marginType };
+  }
+  try {
+    return await request('POST', '/fapi/v1/marginType', { symbol: symbol.toUpperCase(), marginType }, { signed: true, retryable: false });
+  } catch (e) {
+    if (String(e.message).includes('-4046')) return { code: -4046, msg: 'No need to change margin type.' };
+    throw e;
+  }
+}
+
 /** 撤单 */
 export async function cancelOrder(symbol, orderId) {
   const path = _market === 'futures' ? '/fapi/v1/order' : '/api/v3/order';
