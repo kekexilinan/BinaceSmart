@@ -2204,31 +2204,44 @@ async function getFuturesSymbols() {
   }
 
   // === 交易管理台 API（trade-console） ===
-  // 写操作需 TRADE_CONSOLE_TOKEN 校验（header x-trade-token 或 body.token），防公网误触
-  const TRADE_TOKEN = process.env.TRADE_CONSOLE_TOKEN || '';
-  const tradeHeaders = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-token' };
+  // 全部接口（含只读）需密码校验：header x-trade-password 或 body.password，匹配 TRADE_CONSOLE_PASSWORD
+  const TRADE_PWD = process.env.TRADE_CONSOLE_PASSWORD || '';
+  const tradeHeaders = { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-password' };
+  const tradePwdOk = (pwd) => !!TRADE_PWD && pwd === TRADE_PWD;
   if (url.pathname.startsWith('/api/trade/') && req.method === 'OPTIONS') {
-    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-token' });
+    res.writeHead(204, { 'Access-Control-Allow-Origin': '*', 'Access-Control-Allow-Methods': 'GET,POST', 'Access-Control-Allow-Headers': 'Content-Type, x-trade-password' });
     res.end();
     return;
   }
   if (url.pathname === '/api/trade/status') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
     apiConsoleStatus().then(s => { res.writeHead(200, tradeHeaders); res.end(JSON.stringify(s)); })
       .catch(e => { res.writeHead(500, tradeHeaders); res.end(JSON.stringify({ error: e.message })); });
     return;
   }
   if (url.pathname === '/api/trade/orders') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
     const status = url.searchParams.get('status') || undefined;
     res.writeHead(200, tradeHeaders);
     res.end(JSON.stringify(getAllOrders({ status, limit: 500 })));
     return;
   }
   if (url.pathname === '/api/trade/positions') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
     res.writeHead(200, tradeHeaders);
     res.end(JSON.stringify(getOpenPositions()));
     return;
   }
   if (url.pathname === '/api/trade/logs') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
     res.writeHead(200, tradeHeaders);
     res.end(JSON.stringify(getTradeLogs({ limit: Number(url.searchParams.get('limit') || 300) })));
     return;
@@ -2239,15 +2252,10 @@ async function getFuturesSymbols() {
     req.on('end', async () => {
       try {
         const data = body ? JSON.parse(body) : {};
-        const token = req.headers['x-trade-token'] || data.token || '';
-        if (!TRADE_TOKEN) {
-          res.writeHead(403, tradeHeaders);
-          res.end(JSON.stringify({ ok: false, error: '服务端未配置 TRADE_CONSOLE_TOKEN，写操作已禁用' }));
-          return;
-        }
-        if (token !== TRADE_TOKEN) {
+        const pwd = req.headers['x-trade-password'] || data.password || '';
+        if (!tradePwdOk(pwd)) {
           res.writeHead(401, tradeHeaders);
-          res.end(JSON.stringify({ ok: false, error: 'token 无效' }));
+          res.end(JSON.stringify({ ok: false, error: !TRADE_PWD ? '服务端未配置 TRADE_CONSOLE_PASSWORD，操作已禁用' : '密码错误' }));
           return;
         }
         let result;

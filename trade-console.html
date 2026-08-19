@@ -67,6 +67,25 @@ tr:hover td { background: #1c2128; }
 .detail-cell { max-width: 460px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .footer { margin-top: 16px; font-size: 11px; color: #8b949e; display: flex; justify-content: space-between; }
 
+/* 密码登录遮罩层 */
+#loginMask {
+  position: fixed; inset: 0; z-index: 100; background: #0d1117;
+  display: flex; align-items: center; justify-content: center; padding: 24px;
+}
+#loginMask.hidden { display: none; }
+.login-box { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 32px 28px; width: 100%; max-width: 340px; text-align: center; }
+.login-box h2 { font-size: 18px; margin-bottom: 6px; }
+.login-box .sub { font-size: 12px; color: #8b949e; margin-bottom: 20px; }
+.login-box input {
+  width: 100%; background: #0d1117; border: 1px solid #30363d; border-radius: 8px;
+  color: #e6edf3; padding: 12px 14px; font-size: 15px; margin-bottom: 12px; outline: none;
+  letter-spacing: 2px; text-align: center;
+}
+.login-box input:focus { border-color: #58a6ff; }
+.login-box .btn { width: 100%; padding: 12px; font-size: 14px; background: #238636; border-color: #2ea04355; color: #fff; }
+.login-box .btn:hover { background: #2ea043; }
+.login-err { color: #f85149; font-size: 12px; min-height: 16px; margin-bottom: 8px; }
+
 /* ===== 移动端适配 ===== */
 @media (max-width: 720px) {
   body { padding: 12px; }
@@ -89,7 +108,19 @@ tr:hover td { background: #1c2128; }
 </style>
 </head>
 <body>
-<div class="container">
+<!-- 密码登录遮罩：验证通过前不展示任何交易数据 -->
+<div id="loginMask">
+  <div class="login-box">
+    <h2>🔐 交易管理台</h2>
+    <div class="sub">请输入密码查看（浏览器会记住）</div>
+    <div class="login-err" id="loginErr"></div>
+    <input type="password" id="pwdInput" placeholder="密码" autocomplete="off"
+      onkeydown="if(event.key==='Enter')doLogin()">
+    <button class="btn" onclick="doLogin()">进入管理台</button>
+  </div>
+</div>
+
+<div class="container" id="mainUI" style="visibility:hidden">
   <div class="header">
     <div>
       <h1>🤖 交易管理台</h1>
@@ -97,7 +128,7 @@ tr:hover td { background: #1c2128; }
     </div>
     <div class="header-right">
       <span id="modePill" class="pill pill-dry">加载中</span>
-      <button class="btn" onclick="setToken()">设置 Token</button>
+      <button class="btn" onclick="logout()">退出登录</button>
       <button class="btn btn-danger" onclick="panicCancel()">🛑 一键撤单</button>
     </div>
   </div>
@@ -162,15 +193,45 @@ tr:hover td { background: #1c2128; }
 <script>
 const $ = id => document.getElementById(id);
 let allOrders = [], openPositions = [];
+let authed = false;
 
-function getToken() {
-  const u = new URL(location.href);
-  if (u.searchParams.get('token')) { localStorage.setItem('tradeToken', u.searchParams.get('token')); }
-  return localStorage.getItem('tradeToken') || '';
+// 密码存浏览器本地，首次输入后免登
+function getPwd() { return localStorage.getItem('tradePwd') || ''; }
+function savePwd(p) { localStorage.setItem('tradePwd', p); }
+function clearPwd() { localStorage.removeItem('tradePwd'); }
+
+function showMask(msg) {
+  authed = false;
+  $('mainUI').style.visibility = 'hidden';
+  $('loginMask').classList.remove('hidden');
+  if (msg) $('loginErr').textContent = msg;
+  $('pwdInput').focus();
 }
-function setToken() {
-  const t = prompt('输入管理 token（保存在浏览器本地）:', localStorage.getItem('tradeToken') || '');
-  if (t !== null) { localStorage.setItem('tradeToken', t.trim()); refreshAll(); }
+function hideMask() {
+  authed = true;
+  $('loginMask').classList.add('hidden');
+  $('mainUI').style.visibility = 'visible';
+  $('loginErr').textContent = '';
+}
+
+async function tryAuth(pwd) {
+  const res = await fetch('/api/trade/status', { headers: { 'x-trade-password': pwd } });
+  return res.status === 200;
+}
+async function doLogin() {
+  const pwd = $('pwdInput').value.trim();
+  if (!pwd) { $('loginErr').textContent = '请输入密码'; return; }
+  $('loginErr').textContent = '验证中…';
+  try {
+    if (await tryAuth(pwd)) { savePwd(pwd); hideMask(); refreshAll(); }
+    else { $('loginErr').textContent = '密码错误'; $('pwdInput').select(); }
+  } catch (e) { $('loginErr').textContent = '网络错误: ' + e.message; }
+}
+function logout() {
+  if (!confirm('退出后需重新输入密码，确认？')) return;
+  clearPwd();
+  $('pwdInput').value = '';
+  showMask();
 }
 function banner(type, msg) {
   const el = $('banner');
@@ -182,16 +243,18 @@ function banner(type, msg) {
 async function api(path, opts = {}) {
   const res = await fetch(path, {
     ...opts,
-    headers: { 'Content-Type': 'application/json', 'x-trade-token': getToken(), ...(opts.headers || {}) },
+    headers: { 'Content-Type': 'application/json', 'x-trade-password': getPwd(), ...(opts.headers || {}) },
   });
+  if (res.status === 401) { showMask('登录已失效，请重新输入密码'); throw new Error('unauthorized'); }
   return res.json();
 }
 async function post(path, data) {
   const res = await fetch(path, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'x-trade-token': getToken() },
+    headers: { 'Content-Type': 'application/json', 'x-trade-password': getPwd() },
     body: JSON.stringify(data),
   });
+  if (res.status === 401) { showMask('登录已失效，请重新输入密码'); return { ok: false, error: 'unauthorized' }; }
   return res.json();
 }
 
@@ -208,6 +271,7 @@ function fmtNum(v, digits = 4) {
 }
 
 async function refreshAll() {
+  if (!authed) return;
   try {
     const [status, orders, positions, logs] = await Promise.all([
       api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'),
@@ -215,7 +279,7 @@ async function refreshAll() {
     renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs);
     $('lastUpdate').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
   } catch (e) {
-    banner('error', '刷新失败: ' + e.message);
+    if (e.message !== 'unauthorized') banner('error', '刷新失败: ' + e.message);
   }
 }
 
@@ -344,8 +408,18 @@ async function panicCancel() {
   refreshAll();
 }
 
-getToken();
-refreshAll();
+// 启动：浏览器已记住密码则静默验证免登，否则显示密码输入
+(async () => {
+  const saved = getPwd();
+  if (saved) {
+    try {
+      if (await tryAuth(saved)) { hideMask(); refreshAll(); }
+      else { clearPwd(); showMask(); }
+    } catch { showMask(); }
+  } else {
+    showMask();
+  }
+})();
 setInterval(refreshAll, 10000);
 </script>
 </body>
