@@ -792,6 +792,14 @@ async function loadAll() {
 // ====== Init ======
 initCharts();
 
+// 支持外部带 ?symbol=XXX 跳转进入（如管理台币况追踪的币种联动），参数写入后清除 URL
+const _urlSym = new URLSearchParams(location.search).get('symbol');
+if (_urlSym) {
+  const _norm = _urlSym.toUpperCase();
+  localStorage.setItem('dashSymbol', _norm.endsWith('USDT') ? _norm : _norm + 'USDT');
+  history.replaceState(null, '', location.pathname);
+}
+
 // Set default symbol to BANK before loading
 const symbolSelect = document.getElementById('symbolSelect');
 if (symbolSelect) {

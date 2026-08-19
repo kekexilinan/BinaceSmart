@@ -70,6 +70,10 @@ tr:hover td { background: #1c2128; }
 }
 .cfg-item input:focus { border-color: #58a6ff; }
 
+/* 币种跳转链接（联动 Dashboard 趋势图） */
+.sym-jump { color: #e6edf3; text-decoration: none; border-bottom: 1px dashed #30363d; transition: all 0.15s; }
+.sym-jump:hover { color: #58a6ff; border-bottom-color: #58a6ff; }
+
 .banner { display: none; padding: 10px 14px; border-radius: 8px; font-size: 12px; margin-bottom: 14px; border: 1px solid; }
 .banner.error { display: block; background: #3d151533; border-color: #f85149; color: #f85149; }
 .banner.info { display: block; background: #0c2d6b33; border-color: #58a6ff; color: #58a6ff; }
@@ -454,7 +458,7 @@ function renderTrack(data) {
     const absentCell = r.streak > 0 ? '<span class="muted">▪ 0</span>' : `${arrow(r.absentTrend)}<span class="${r.absent >= 4 ? 'negative' : ''}">${r.absent}</span>`;
     const adv = r.advice || {};
     return `<tr>
-      <td style="font-weight:600">${sym}</td>
+      <td style="font-weight:600"><a class="sym-jump" href="/?symbol=${sym}" target="_blank" title="新标签页到 Dashboard 看多空比趋势">${sym}</a></td>
       <td><span style="color:${stColor}">${stLabel}</span>${r.lastIsCandidate ? ' <span class="pill pill-live" style="font-size:10px">候选</span>' : ''}</td>
       <td style="text-align:right">${r.appearances}</td>
       <td style="text-align:right">${streakCell}</td>
