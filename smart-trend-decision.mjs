@@ -53,7 +53,7 @@ const ACTION_PLAYBOOK = {
   },
   distribution: {
     scene: '反转',
-    action: '聪明钱派发，减持多单',
+    action: '大户派发，减持多单',
     avoid: '勿加仓',
     waitFor: '跌破支撑',
     urgency: 'medium',
@@ -71,7 +71,7 @@ const VERDICT_BULLETS = {
   机会偏多: '总体偏多：顺势品种可轻仓跟进，反转品种等确认',
   风险偏空: '总体偏空：禁止追多，关注冲高回落做空机会',
   多空分歧: '方向不明：只观察不新开仓，等信号延续',
-  观望: '本小时无强信号，建议观望，继续跟踪聪明钱连续性',
+  观望: '本小时无强信号，建议观望，继续跟踪信号连续性',
 };
 
 function sceneTag(scene) {
@@ -359,8 +359,8 @@ function buildReasons(row, sources, viewKey) {
   if (change != null && Math.abs(change) >= 8) reasons.push(`24h ${fmtPct(change)}`);
   if (volumeRank && volumeRank <= 10) reasons.push(`成交额#${volumeRank}`);
   if (hasSource(sources, 'rightSide')) reasons.push('右侧形态');
-  if (row.direction === 'long') reasons.push(`聪明钱偏多 ${fmtRatio(row.ratio)}`);
-  if (row.direction === 'short') reasons.push(`聪明钱偏空 ${fmtRatio(row.ratio)}`);
+  if (row.direction === 'long') reasons.push(`偏多 ${fmtRatio(row.ratio)}`);
+  if (row.direction === 'short') reasons.push(`偏空 ${fmtRatio(row.ratio)}`);
   if (num(row.ratioDeltaPct) != null && Math.abs(row.ratioDeltaPct) >= 5) reasons.push(`1hΔ ${fmtPct(row.ratioDeltaPct)}`);
   if (num(row.ratio8amDeltaPct) != null && Math.abs(row.ratio8amDeltaPct) >= 5) reasons.push(`8amΔ ${fmtPct(row.ratio8amDeltaPct)}`);
 
@@ -539,7 +539,7 @@ function buildSummary(action, watch, invalidated, stats, outlook) {
   const oldVerdict = outlook?.verdict ? `旧研判: ${outlook.verdict}` : '';
   const advice = action.length
     ? `重点看 ${action.length} 个，观察 ${watch.length} 个；反向信号先要求连续确认，避免小时级来回反手。`
-    : `暂无足够强的可行动候选，先观察聪明钱连续性。`;
+    : `暂无足够强的可行动候选，先观察信号连续性。`;
 
   return {
     verdict,
@@ -767,7 +767,7 @@ function changeDataTable(title, items, highlightPct = 10, heldSymbols = new Set(
   return [
     {
       tag: 'markdown',
-      content: `**${title}**\n_净多空比含 1h|8am 聪明钱变化 · 8am推=当日1h净多空比±5%累计计分 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
+      content: `**${title}**\n_净多空比含 1h|8am 变化 · 8am推=当日1h净多空比±5%累计计分 · 价格先显示变化比例、悬停看价位详情 · 参考=基于8amΔ_`,
     },
     {
       tag: 'table',
@@ -815,7 +815,7 @@ export function buildSmartTrendDecisionElements(decision, { highlightPct = 10, h
   const showDecisionLegend = decision.action.length > 0 || watchDisplay.length > 0;
 
   const lines = [
-    `**⏰ ${now}** · 聪明钱操作清单`,
+    `**⏰ ${now}** · 操作清单`,
     '',
     '**【本小时怎么做】**',
     ...bullets.map((b, i) => `${i + 1}. ${b}`),
