@@ -12,6 +12,7 @@ const DB_PATH = join(__dirname, 'data', 'smart-money.db');
 
 let db = null;
 let saveTimer = null;
+let dbDirty = false; // 脏标记：仅在有写入时落盘，避免旧内存副本无条件覆盖外部修改
 const SAVE_INTERVAL_MS = 30_000; // 每30秒持久化一次
 
 /** 初始化数据库 */
@@ -24,6 +25,10 @@ export async function initDB() {
   } else {
     db = new SQL.Database();
   }
+
+  // 包装写操作：任何 db.run 均标脏（建表/迁移/业务写入都走 db.run）
+  const origRun = db.run.bind(db);
+  db.run = (...args) => { dbDirty = true; return origRun(...args); };
 
   // 建表
   db.run(`
@@ -160,8 +165,8 @@ export async function initDB() {
   db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_ts ON tick_symbol_log(tick_ts)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_sym ON tick_symbol_log(symbol, tick_ts)');
 
-  // 定期持久化
-  saveTimer = setInterval(() => persistDB(), SAVE_INTERVAL_MS);
+  // 定期持久化（仅脏时写盘）
+  saveTimer = setInterval(() => { if (dbDirty) persistDB(); }, SAVE_INTERVAL_MS);
 
   console.log(`  📦 数据库已初始化: ${DB_PATH}`);
   return db;
@@ -174,6 +179,7 @@ export function persistDB() {
     const data = db.export();
     const buffer = Buffer.from(data);
     writeFileSync(DB_PATH, buffer);
+    dbDirty = false;
   } catch (e) {
     console.warn(`  ⚠ DB持久化失败: ${e.message}`);
   }
