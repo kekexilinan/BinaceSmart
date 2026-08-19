@@ -256,6 +256,12 @@ function cleanBinanceId(id) {
   return /^\d+\.0+$/.test(s) ? s.replace(/\.0+$/, '') : s;
 }
 
+/** 订单是否已有部分成交（executedQty > 0） */
+function executedQtyOf(ex) {
+  const v = parseFloat(ex?.executedQty || 0);
+  return Number.isFinite(v) && v > 0 ? v : 0;
+}
+
 async function syncOrderFill(order) {
   if (!order.binance_id || isDryRun()) return false;
   let ex;
@@ -272,6 +278,14 @@ async function syncOrderFill(order) {
     return true;
   }
   if (ex?.status === 'CANCELED' || ex?.status === 'EXPIRED' || ex?.status === 'REJECTED') {
+    const filled = executedQtyOf(ex);
+    if (filled > 0) {
+      // 部分成交后在交易所侧关闭（手动撤单/过期）：按实际成交量收编为持仓，避免孤儿仓
+      const fillPrice = parseFloat(ex.avgPrice) || order.price;
+      openPositionFromOrder(order, fillPrice, filled);
+      logger.log?.(`  ✅ 检测到部分成交 ${order.symbol} id=${order.id} qty=${filled}/${order.qty} price=${fillPrice}，已收编为持仓`);
+      return true;
+    }
     // 交易所侧已不在（手动撤单/资金费结算等），同步本地状态避免永远 pending
     updateAutoOrder(order.id, { status: 'cancelled', cancelledAt: Date.now() });
     logAutoTrade(order.symbol, 'sync_cancel', { orderId: order.id, exStatus: ex.status });
@@ -280,12 +294,13 @@ async function syncOrderFill(order) {
   return false;
 }
 
-function openPositionFromOrder(order, fillPrice) {
+function openPositionFromOrder(order, fillPrice, fillQty = order.qty) {
+  const qty = fillQty || order.qty;
   insertAutoPosition({
     id: randomUUID(),
     symbol: order.symbol,
     entryPrice: fillPrice,
-    qty: order.qty,
+    qty,
     entryOrderId: order.id,
     tpPrice: fillPrice * (1 + cfg.tpPct / 100),
     slPrice: fillPrice * (1 - cfg.slPct / 100),
@@ -293,7 +308,8 @@ function openPositionFromOrder(order, fillPrice) {
     openedAt: Date.now(),
   });
   updateAutoOrder(order.id, { status: 'filled', filledAt: Date.now() });
-  logAutoTrade(order.symbol, 'fill', { orderId: order.id, price: fillPrice, qty: order.qty });
+  const partial = qty < order.qty - 1e-9;
+  logAutoTrade(order.symbol, 'fill', { orderId: order.id, price: fillPrice, qty, ...(partial ? { partial: true, orderQty: order.qty } : {}) });
 }
 
 async function maintainPendingOrders(candidates, now) {
@@ -329,7 +345,15 @@ async function cancelLocalOrder(order, reason) {
   logger.log?.(`  ❌ 撤单 ${order.symbol} id=${order.id} reason=${reason} price=${order.price}`);
   if (order.binance_id && !isDryRun()) {
     try {
-      await cancelOrder(order.symbol, cleanBinanceId(order.binance_id));
+      // DELETE 响应携带订单终态：若撤单前已有部分成交，撤单响应里 executedQty>0
+      const resp = await cancelOrder(order.symbol, cleanBinanceId(order.binance_id));
+      const filled = executedQtyOf(resp);
+      if (filled > 0) {
+        const fillPrice = parseFloat(resp?.avgPrice) || order.price;
+        openPositionFromOrder(order, fillPrice, filled);
+        logger.log?.(`  ℹ ${order.symbol} 撤单前部分成交 ${filled}/${order.qty}，已按成交量收编为持仓`);
+        return;
+      }
     } catch (e) {
       // 竞态保护：撤单失败可能是挂单刚成交，先确认状态再决定是否标 cancelled
       logger.warn?.(`  ⚠ 交易所撤单失败 ${order.symbol}: ${e.message}`);
@@ -613,6 +637,11 @@ export async function apiCancelOrder(orderId) {
       if (ex?.status === 'FILLED') {
         openPositionFromOrder(order, parseFloat(ex.avgPrice) || order.price);
         return { ok: true, result: 'filled', msg: `${order.symbol} 撤单时刚成交，已转为持仓管理` };
+      }
+      const filled = executedQtyOf(ex);
+      if (filled > 0) {
+        openPositionFromOrder(order, parseFloat(ex.avgPrice) || order.price, filled);
+        return { ok: true, result: 'partial', msg: `${order.symbol} 部分成交 ${filled}/${order.qty}，已按成交量收编为持仓` };
       }
     } catch { /* 回查失败不阻断，撤单已成功 */ }
   }
