@@ -1197,12 +1197,14 @@ export async function runSmartTrendPush({ force = false } = {}) {
     if (deps.decisionEnabled && deps.sendDecisionCard) {
       try {
         const elements = buildSmartTrendDecisionElements(decisionPush, { highlightPct, heldSymbols });
+        const VERDICT_ICON_MAP = { '机会偏多': '📈', '风险偏空': '📉', '多空分歧': '⚖️', '观望': '⏸' };
+        const verdictIcon = VERDICT_ICON_MAP[decisionPush.summary.verdict] || '⏸';
         await deps.sendDecisionCard(
-          `🎯 操作清单 · ${decisionPush.summary.verdict}`,
+          `🎯 ${verdictIcon}`,
           elements,
           decisionPush.summary.template,
         );
-        console.log(`  ✓ 操作清单已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length}`);
+        console.log(`  ✓ 决策摘要已推送: 重点 ${decisionPush.action.length} · 观察 ${decisionPush.watch.length}`);
       } catch (e) {
         console.warn(`  ⚠ 聪明钱决策摘要推送失败: ${e.message}`);
       }

@@ -67,6 +67,13 @@ const ACTION_PLAYBOOK = {
   },
 };
 
+const VERDICT_ICONS = {
+  '机会偏多': '📈',
+  '风险偏空': '📉',
+  '多空分歧': '⚖️',
+  '观望': '⏸',
+};
+
 const VERDICT_BULLETS = {
   机会偏多: '总体偏多：顺势品种可轻仓跟进，反转品种等确认',
   风险偏空: '总体偏空：禁止追多，关注冲高回落做空机会',
@@ -807,8 +814,9 @@ export function buildSmartTrendDecisionElements(decision, { highlightPct = 10, h
   const dataItems = [...decision.action, ...watchDisplay];
   const showDecisionLegend = decision.action.length > 0 || watchDisplay.length > 0;
 
+  const verdictIcon = VERDICT_ICONS[summary.verdict] || '⏸';
   const lines = [
-    `**⏰ ${now}** · 操作清单`,
+    `**⏰ ${now}** ${verdictIcon}`,
     '',
     '**【本小时怎么做】**',
     ...bullets.map((b, i) => `${i + 1}. ${b}`),
