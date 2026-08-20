@@ -227,7 +227,8 @@ export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
       r.changeSince8am ?? r.change8am ?? null,
       r.ratio ?? r.topRatio ?? r.whaleRatio ?? null,
       r.globalRatio ?? null,
-      r.topVsGlobal ?? null,
+      // smart-trend 推送行无 topVsGlobal 字段，其背离差值(divergence)即该列语义
+      r.topVsGlobal ?? r.divergence ?? null,
       r.ratioDeltaPct ?? null,
       r.ratio8amDeltaPct ?? null,
       r.direction || null,
@@ -295,7 +296,7 @@ export function querySymbolTrend({ symbol, range = '24h', limit = 200 } = {}) {
 }
 
 /** 推送专属列：鲸鱼采集批次不含这些字段，读取时从该币最近一次非空记录回填 */
-const SNAPSHOT_BACKFILL_COLS = ['market_cap', 'score', 'change_since_8am', 'volume'];
+const SNAPSHOT_BACKFILL_COLS = ['market_cap', 'score', 'change_since_8am', 'volume', 'top_vs_global'];
 
 /** 查询最新一批快照的所有币种 */
 export function queryLatestSnapshot() {
