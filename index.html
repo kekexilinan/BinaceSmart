@@ -291,12 +291,16 @@ tr:hover td { background: #1c2128; }
       <thead>
         <tr>
           <th>币种</th>
-          <th>价格</th>
           <th style="text-align:right">24h涨幅</th>
-          <th style="text-align:right">大户比</th>
-          <th style="text-align:right">全网比</th>
+          <th style="text-align:right">价格</th>
+          <th style="text-align:right">净多空比</th>
+          <th style="text-align:right">大户/全网</th>
+          <th style="text-align:right">8am推</th>
+          <th style="text-align:right">市值/成交额</th>
+          <th style="text-align:right">背离</th>
+          <th style="text-align:right">资金费变化</th>
           <th style="text-align:right">1h变化</th>
-          <th>方向</th>
+          <th>标签</th>
         </tr>
       </thead>
       <tbody id="boardTbody"></tbody>
@@ -502,19 +506,35 @@ function renderBoard(category) {
   if (!tbody) return;
   const filtered = getFilteredRows(category, allBoardRows);
   const top20 = filtered.slice(0, 20);
+  // 与单币多空比趋势图 hover 弹窗保持一致的字段与格式
+  const fmtVol = v => !v ? '-' : v >= 1e8 ? (v / 1e8).toFixed(1) + '亿' : v >= 1e4 ? (v / 1e4).toFixed(0) + '万' : v.toFixed(0);
+  const R = 'text-align:right';
   tbody.innerHTML = top20.map(r => {
     const chg = (r.change_24h || 0).toFixed(2);
     const chgColor = r.change_24h >= 0 ? '#3fb950' : '#f85149';
     const ratioChg = (r.ratio_delta_1h || 0).toFixed(2);
     const ratioColor = r.ratio_delta_1h >= 0 ? '#3fb950' : '#f85149';
+    const topGlobal = (r.global_ratio > 0 && r.whale_ratio != null) ? (r.whale_ratio / r.global_ratio).toFixed(2) + 'x' : '-';
+    const scoreStr = r.score != null ? (r.score > 0 ? '+' + r.score : '' + r.score) : '-';
+    const scoreColor = (r.score || 0) >= 0 ? '#3fb950' : '#f85149';
+    const since8 = r.change_since_8am != null ? ' <span style="color:#8b949e;font-size:10px">(' + (r.change_since_8am >= 0 ? '+' : '') + r.change_since_8am.toFixed(2) + '%)</span>' : '';
+    const divStr = r.top_vs_global != null ? ((r.top_vs_global >= 0 ? '+' : '') + r.top_vs_global.toFixed(2)) : '-';
+    const divColor = (r.top_vs_global || 0) >= 0 ? '#3fb950' : '#f85149';
+    const frStr = r.funding_rate != null ? r.funding_rate.toFixed(4) + '%' : '-';
+    const frColor = (r.funding_rate || 0) >= 0 ? '#3fb950' : '#f85149';
+    const dirLabel = r.direction === 'long' ? '<span style="color:#3fb950">做多</span>' : r.direction === 'short' ? '<span style="color:#f85149">做空</span>' : '<span style="color:#8b949e">中性</span>';
     return `<tr>
       <td style="font-weight:600"><span class="symbol-link" data-symbol="${r.symbol}" title="点击查看多空比趋势">${r.symbol.replace('USDT','')}</span></td>
-      <td>$${r.price}</td>
-      <td style="color:${chgColor}">${chg}%</td>
-      <td>${(r.top_ratio || 0).toFixed(4)}</td>
-      <td>${(r.global_ratio || 0).toFixed(4)}</td>
-      <td style="color:${ratioColor}">${ratioChg > 0 ? '+' : ''}${ratioChg}</td>
-      <td><span style="color:${r.direction === 'long' ? '#3fb950' : '#f85149'}">${r.direction === 'long' ? '\u505a\u591a' : '\u505a\u7a7a'}</span></td>
+      <td style="${R};color:${chgColor}">${chg > 0 ? '+' : ''}${chg}%</td>
+      <td style="${R}">${r.price != null ? '$' + r.price : '-'}</td>
+      <td style="${R}">${r.top_ratio != null ? r.top_ratio.toFixed(4) : '-'}</td>
+      <td style="${R}">${topGlobal}</td>
+      <td style="${R};color:${scoreColor}">${scoreStr}${since8}</td>
+      <td style="${R}">${fmtVol(r.market_cap)} / ${fmtVol(r.volume)}</td>
+      <td style="${R};color:${divColor}">${divStr}</td>
+      <td style="${R};color:${frColor}">${frStr}</td>
+      <td style="${R};color:${ratioColor}">${ratioChg > 0 ? '+' : ''}${ratioChg}</td>
+      <td>${dirLabel}</td>
     </tr>`;
   }).join('');
 }
