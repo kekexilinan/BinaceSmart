@@ -423,6 +423,54 @@ function renderPositions(positions) {
   }
 }
 
+// ====== 操作日志详情人话化 ======
+const LOG_REASON_LABEL = {
+  ttl_expired: '挂单超时未成交',
+  chase_reprice: '追价改单',
+  manual: '手动',
+  take_profit: '止盈触发',
+  stop_loss: '止损触发',
+  out_of_watchlist: '移出决策清单',
+};
+function logReasonLabel(reason) {
+  if (!reason) return '';
+  if (LOG_REASON_LABEL[reason]) return LOG_REASON_LABEL[reason];
+  const m = /^dropped_(\d+)ticks$/.exec(reason);
+  if (m) return `连续 ${m[1]} 个 tick 移出决策清单`;
+  return reason;
+}
+
+/** 把 detail JSON 转成一句人话（原始 JSON 保留在悬浮提示里） */
+function humanizeDetail(action, d) {
+  if (!d) return '';
+  const f = (v, n = 6) => (typeof v === 'number' ? v.toFixed(n) : v);
+  const pct = (v) => v == null ? '' : ` · <span class="${v >= 0 ? 'positive' : 'negative'}">${v >= 0 ? '+' : ''}${v}%</span>`;
+  switch (action) {
+    case 'place':
+      return `限价 $${f(d.price)} × ${d.qty} · 回踩 ${d.pullback}% · 评分 ${d.score}分`;
+    case 'sync_cancel':
+      return `交易所侧已不在（${d.exStatus || '已撤销'}），本地同步标记撤销`;
+    case 'cancel':
+      return `${logReasonLabel(d.reason) || '撤销'}${d.binanceId ? ` · 交易所单 #${d.binanceId}` : ''}`;
+    case 'fill':
+      return `成交 $${f(d.price)} × ${d.qty}${d.partial ? ` · 部分成交（原量 ${d.orderQty}）` : ''}`;
+    case 'close':
+      return `平仓·${logReasonLabel(d.reason) || d.reason || '自动'} · 开 $${f(d.entry)} → 平 $${f(d.exit)}${pct(d.pnlPct)}`;
+    case 'close_manual':
+      return `手动平仓 · 开 $${f(d.entry)} → 平 $${f(d.exit)}${pct(d.pnlPct)}`;
+    case 'close_fail':
+      return `平仓失败（${logReasonLabel(d.reason) || d.reason || '未知'}）：${d.error || '未知错误'} · 下轮自动重试`;
+    case 'panic_cancel':
+      return `一键撤单：共 ${d.total} 张，成功 ${d.ok} · 失败 ${d.fail}`;
+    case 'config_update': {
+      const applied = Object.entries(d.applied || {}).map(([k, v]) => `${k}=${v}`).join(', ');
+      return `更新参数：${applied || '无变化'}`;
+    }
+    default:
+      return Object.entries(d).filter(([k]) => k !== 'source').map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+  }
+}
+
 function renderLogs(logs) {
   const list = Array.isArray(logs) ? logs : [];
   const body = $('logsBody');
@@ -432,10 +480,11 @@ function renderLogs(logs) {
   for (const l of list) {
     let detail = l.detail || '';
     let source = 'auto';
+    let human = detail;
     try {
       const d = JSON.parse(detail);
       if (d.source === 'manual') source = 'manual';
-      detail = Object.entries(d).filter(([k]) => k !== 'source').map(([k, v]) => `${k}=${typeof v === 'object' ? JSON.stringify(v) : v}`).join(' ');
+      human = humanizeDetail(l.action, d) || detail;
     } catch {}
     const tr = document.createElement('tr');
     tr.innerHTML = `
@@ -443,7 +492,7 @@ function renderLogs(logs) {
       <td>${l.symbol ? `<a class="sym-jump" href="/?symbol=${l.symbol.replace('USDT', '')}" target="_blank" title="查看多空比趋势">${l.symbol.replace('USDT', '')}</a>` : '--'}</td>
       <td>${ACTION_LABEL[l.action] || l.action}</td>
       <td><span class="pill pill-${source}">${source === 'manual' ? '手动' : '自动'}</span></td>
-      <td class="mono detail-cell" title="${detail.replace(/"/g, '&quot;')}">${detail}</td>`;
+      <td class="mono detail-cell" title="${detail.replace(/"/g, '&quot;')}">${human}</td>`;
     body.appendChild(tr);
   }
 }
