@@ -467,7 +467,8 @@ async function loadLatestSnapshot() {
 
 // ====== Board / Leaderboard Tab Logic ======
 let allBoardRows = [];
-const WATCHLIST = ['BTCUSDT','ETHUSDT','BNBUSDT','SOLUSDT','XRPUSDT','DOGEUSDT','ADAUSDT','AVAXUSDT','DOTUSDT','LINKUSDT','UNIUSDT','AAVEUSDT'];
+// 固定监控 tab 使用上方"固定监控币"设置的数据（/api/pinned-symbols，持久化于 data/pinned-symbols.json）
+let pinnedSymbols = [];
 let currentCategory = 'gainers';
 
 function getFilteredRows(category, rows) {
@@ -477,7 +478,7 @@ function getFilteredRows(category, rows) {
     case 'losers':
       return [...rows].filter(r => (r.change_24h || 0) < 0).sort((a, b) => (a.change_24h || 0) - (b.change_24h || 0));
     case 'watchlist':
-      return rows.filter(r => WATCHLIST.includes(r.symbol));
+      return rows.filter(r => pinnedSymbols.includes(r.symbol));
     case 'signal':
       return [...rows].filter(r => Math.abs(r.ratio_delta_1h || 0) >= 5).sort((a, b) => Math.abs(b.ratio_delta_1h || 0) - Math.abs(a.ratio_delta_1h || 0));
     case 'volume':
@@ -491,7 +492,7 @@ function updateTabCounts(rows) {
   const counts = {
     gainers: rows.filter(r => (r.change_24h || 0) > 0).length,
     losers: rows.filter(r => (r.change_24h || 0) < 0).length,
-    watchlist: rows.filter(r => WATCHLIST.includes(r.symbol)).length,
+    watchlist: rows.filter(r => pinnedSymbols.includes(r.symbol)).length,
     signal: rows.filter(r => Math.abs(r.ratio_delta_1h || 0) >= 5).length,
     volume: rows.length,
   };
@@ -841,13 +842,14 @@ initSymbolSearch();
 setInterval(loadAll, REFRESH_INTERVAL);
 
 // ====== 固定监控币设置 ======
-let pinnedSymbols = [];
-
 async function loadPinnedSymbols() {
   const resp = await fetchJSON('/api/pinned-symbols');
   if (resp && resp.ok) {
     pinnedSymbols = resp.symbols || [];
     renderPinnedSymbols();
+    // 固定监控 tab 的计数/过滤依赖 pinnedSymbols，异步加载完成后需刷新（可能晚于首次榜单渲染）
+    updateTabCounts(allBoardRows);
+    if (currentCategory === 'watchlist') renderBoard('watchlist');
   }
 }
 
