@@ -192,8 +192,8 @@ async function runTick() {
 
 // ==================== 决策数据 ====================
 
-/** 等待本小时新决策生成（最多 120s）；tick 与决策推送同在 :50 触发，决策扫描需要数百毫秒~数十秒 */
-async function waitForFreshDecision(maxWaitMs = 120_000) {
+/** 等待本小时新决策生成（最多 180s）；tick 与决策推送同在 :50 触发，全池扫描约需 110-120s + 决策构建，需留足窗口 */
+async function waitForFreshDecision(maxWaitMs = 180_000) {
   const tickMinuteStart = Math.floor(Date.now() / 60_000) * 60_000;
   const deadline = Date.now() + maxWaitMs;
   let last = null;
