@@ -165,8 +165,9 @@ export async function initDB() {
   db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_ts ON tick_symbol_log(tick_ts)');
   db.run('CREATE INDEX IF NOT EXISTS idx_tick_symbol_sym ON tick_symbol_log(symbol, tick_ts)');
 
-  // 定期持久化（仅脏时写盘）
+  // 定期持久化（仅脏时写盘；unref 避免一次性脚本被定时器挂住不退出）
   saveTimer = setInterval(() => { if (dbDirty) persistDB(); }, SAVE_INTERVAL_MS);
+  saveTimer.unref?.();
 
   console.log(`  📦 数据库已初始化: ${DB_PATH}`);
   return db;
