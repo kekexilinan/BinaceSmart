@@ -372,7 +372,7 @@ function renderOrders(orders) {
     const ttlMin = Math.floor(ttlLeft / 60000);
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><b>${o.symbol?.replace('USDT', '')}</b><span class="muted">/USDT</span></td>
+      <td><a class="sym-jump" href="/?symbol=${o.symbol?.replace('USDT', '')}" target="_blank" title="查看多空比趋势"><b>${o.symbol?.replace('USDT', '')}</b></a></td>
       <td><span class="pill pill-long">LONG</span></td>
       <td class="mono">${fmtNum(o.price, 6)}</td>
       <td>${fmtNum(o.qty, 2)}</td>
@@ -395,7 +395,7 @@ function renderPositions(positions) {
     const notional = p.entry_price * p.qty;
     const tr = document.createElement('tr');
     tr.innerHTML = `
-      <td><b>${p.symbol?.replace('USDT', '')}</b><span class="muted">/USDT</span></td>
+      <td><a class="sym-jump" href="/?symbol=${p.symbol?.replace('USDT', '')}" target="_blank" title="查看多空比趋势"><b>${p.symbol?.replace('USDT', '')}</b></a></td>
       <td class="mono">${fmtNum(p.entry_price, 6)}</td>
       <td>${fmtNum(p.qty, 2)}</td>
       <td class="muted">${fmtNum(notional, 2)} U</td>
@@ -424,7 +424,7 @@ function renderLogs(logs) {
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td class="muted">${fmtTime(l.ts)}</td>
-      <td>${l.symbol ? l.symbol.replace('USDT', '') : '--'}</td>
+      <td>${l.symbol ? `<a class="sym-jump" href="/?symbol=${l.symbol.replace('USDT', '')}" target="_blank" title="查看多空比趋势">${l.symbol.replace('USDT', '')}</a>` : '--'}</td>
       <td>${ACTION_LABEL[l.action] || l.action}</td>
       <td><span class="pill pill-${source}">${source === 'manual' ? '手动' : '自动'}</span></td>
       <td class="mono detail-cell" title="${detail.replace(/"/g, '&quot;')}">${detail}</td>`;
