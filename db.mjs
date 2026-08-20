@@ -223,7 +223,8 @@ export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
       r.symbol || '',
       r.price ?? null,
       r.change24h ?? r.change ?? null,
-      r.changeSince8am ?? null,
+      // 兼容两条写入链路：smart-trend 推送用 change8am，whale 采集用 changeSince8am
+      r.changeSince8am ?? r.change8am ?? null,
       r.ratio ?? r.topRatio ?? r.whaleRatio ?? null,
       r.globalRatio ?? null,
       r.topVsGlobal ?? null,
@@ -234,7 +235,8 @@ export function insertSymbolSnapshots(rows, timestamp = Date.now()) {
       r.score ?? null,
       r.marketCap ?? null,
       Array.isArray(r.sources) ? r.sources.join(',') : (r.source || null),
-      r.volume ?? null,
+      // 兼容两条写入链路：smart-trend 推送用 volume24h，whale 采集用 volume
+      r.volume ?? r.volume24h ?? null,
       r.fundingRate ?? null,
     ]);
     stmt.step();
@@ -292,6 +294,9 @@ export function querySymbolTrend({ symbol, range = '24h', limit = 200 } = {}) {
   return results.length ? rowsToObjects(results[0]) : [];
 }
 
+/** 推送专属列：鲸鱼采集批次不含这些字段，读取时从该币最近一次非空记录回填 */
+const SNAPSHOT_BACKFILL_COLS = ['market_cap', 'score', 'change_since_8am', 'volume'];
+
 /** 查询最新一批快照的所有币种 */
 export function queryLatestSnapshot() {
   if (!db) return [];
@@ -304,7 +309,36 @@ export function queryLatestSnapshot() {
     ) m ON s.symbol = m.symbol AND s.timestamp = m.max_ts
     ORDER BY s.ratio_delta_1h DESC
   `);
-  return results.length ? rowsToObjects(results[0]) : [];
+  if (!results.length) return [];
+  const rows = rowsToObjects(results[0]);
+
+  // 列级回填：鲸鱼采集(15min)与聪明钱推送(50min)交替写入，
+  // 鲸鱼批次成为最新行时市值/评分/8am涨幅/成交额会缺失，从最近一次非空行补齐，避免列闪烁
+  const pending = rows.filter(r => SNAPSHOT_BACKFILL_COLS.some(c => r[c] == null));
+  if (pending.length) {
+    for (const col of SNAPSHOT_BACKFILL_COLS) {
+      const needSymbols = pending.filter(r => r[col] == null).map(r => r.symbol);
+      if (!needSymbols.length) continue;
+      const placeholders = needSymbols.map(() => '?').join(',');
+      const res = db.exec(`
+        SELECT s.symbol, s.${col}
+        FROM symbol_snapshot s
+        INNER JOIN (
+          SELECT symbol, MAX(timestamp) as ts
+          FROM symbol_snapshot
+          WHERE ${col} IS NOT NULL AND symbol IN (${placeholders})
+          GROUP BY symbol
+        ) m ON s.symbol = m.symbol AND s.timestamp = m.ts
+      `, needSymbols);
+      if (res.length) {
+        const valMap = new Map(rowsToObjects(res[0]).map(r => [r.symbol, r[col]]));
+        for (const row of rows) {
+          if (row[col] == null && valMap.has(row.symbol)) row[col] = valMap.get(row.symbol);
+        }
+      }
+    }
+  }
+  return rows;
 }
 
 /** 查询最新决策 */
