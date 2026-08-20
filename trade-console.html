@@ -49,6 +49,13 @@ tr:hover td { background: #1c2128; }
 .pill-cancelled { background: #1c2128; color: #8b949e; }
 .pill-manual { background: #0c2d6b; color: #58a6ff; }
 .pill-auto { background: #1c2128; color: #8b949e; }
+/* 操作日志动作徽章配色 */
+.pill-act-place { background: #0c2d6b; color: #58a6ff; }
+.pill-act-fill { background: #0c3444; color: #39c5cf; }
+.pill-act-cancel { background: #2d2200; color: #d29922; }
+.pill-act-close { background: #1b4332; color: #3fb950; }
+.pill-act-fail { background: #3d1515; color: #f85149; }
+.pill-act-config { background: #1c2128; color: #8b949e; }
 .positive { color: #3fb950; } .negative { color: #f85149; } .muted { color: #8b949e; }
 
 .btn { border: 1px solid #30363d; background: #21262d; color: #e6edf3; padding: 5px 12px; border-radius: 6px; font-size: 12px; cursor: pointer; transition: all 0.15s; }
@@ -477,6 +484,7 @@ function renderLogs(logs) {
   body.innerHTML = '';
   $('logsEmpty').style.display = list.length ? 'none' : 'block';
   const ACTION_LABEL = { place: '挂单', cancel: '撤单', fill: '成交', open: '开仓', close: '平仓', close_fail: '平仓失败', close_manual: '手动平仓', panic_cancel: '一键撤单', config_update: '改参数', sync_cancel: '同步撤单' };
+  const ACTION_PILL = { place: 'pill-act-place', fill: 'pill-act-fill', open: 'pill-act-fill', cancel: 'pill-act-cancel', sync_cancel: 'pill-act-cancel', close: 'pill-act-close', close_manual: 'pill-act-close', close_fail: 'pill-act-fail', panic_cancel: 'pill-act-fail', config_update: 'pill-act-config' };
   for (const l of list) {
     let detail = l.detail || '';
     let source = 'auto';
@@ -490,7 +498,7 @@ function renderLogs(logs) {
     tr.innerHTML = `
       <td class="muted">${fmtTime(l.ts)}</td>
       <td>${l.symbol ? `<a class="sym-jump" href="/?symbol=${l.symbol.replace('USDT', '')}" target="_blank" title="查看多空比趋势">${l.symbol.replace('USDT', '')}</a>` : '--'}</td>
-      <td>${ACTION_LABEL[l.action] || l.action}</td>
+      <td>${ACTION_LABEL[l.action] ? `<span class="pill ${ACTION_PILL[l.action] || 'pill-act-config'}">${ACTION_LABEL[l.action]}</span>` : (l.action || '--')}</td>
       <td><span class="pill pill-${source}">${source === 'manual' ? '手动' : '自动'}</span></td>
       <td class="mono detail-cell" title="${detail.replace(/"/g, '&quot;')}">${human}</td>`;
     body.appendChild(tr);
