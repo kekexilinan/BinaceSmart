@@ -172,6 +172,7 @@ tr:hover td { background: #1c2128; }
     <div class="tab active" data-tab="orders" onclick="switchTab('orders')">挂单 <span class="count" id="cntOrders">0</span></div>
     <div class="tab" data-tab="positions" onclick="switchTab('positions')">持仓 <span class="count" id="cntPositions">0</span></div>
     <div class="tab" data-tab="logs" onclick="switchTab('logs')">操作日志</div>
+    <div class="tab" data-tab="closed" onclick="switchTab('closed')">💼 已平仓 <span class="count" id="cntClosed">0</span></div>
     <div class="tab" data-tab="track" onclick="switchTab('track')">📈 币况追踪</div>
     <div class="tab" data-tab="config" onclick="switchTab('config')">⚙ 策略参数</div>
   </div>
@@ -200,6 +201,21 @@ tr:hover td { background: #1c2128; }
     </div>
   </div>
 
+  <div id="tab-closed" style="display:none">
+      <div style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;" id="closedStats"></div>
+      <div class="table-wrap">
+        <table>
+          <thead><tr><th>币种</th><th>开仓价</th><th>平仓价</th><th>数量</th><th>盈利</th><th>平仓原因</th><th>开仓时间</th><th>平仓时间</th></tr></thead>
+          <tbody id="closedBody"></tbody>
+        </table>
+        <div class="empty" id="closedEmpty" style="display:none">暂无已平仓记录</div>
+      </div>
+      <div style="margin-top:14px;">
+        <div style="color:#8b949e;font-size:12px;margin-bottom:8px;">📈 每日盈亏（蓝）与累计盈亏（绿），单位 U · 按上海时区聚合 · 鼠标悬停点可看数值</div>
+        <div id="closedChart" style="background:#0d1117;border:1px solid #30363d;border-radius:8px;padding:10px;"></div>
+      </div>
+    </div>
+  
   <div id="tab-logs" style="display:none">
     <div class="table-wrap">
       <table>
@@ -346,8 +362,8 @@ async function fetchCurrentPrices(symbols) {
 async function refreshAll() {
   if (!authed) return;
   try {
-    const [status, orders, positions, logs, track] = await Promise.all([
-      api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'), api('/api/trade/symbol-track'),
+    const [status, orders, positions, logs, track, closedAll] = await Promise.all([
+      api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'), api('/api/trade/symbol-track'), api('/api/trade/closed-positions'),
     ]);
     // 挂单与持仓都需展示现价/盈利，一并拉取
     const priceSymbols = [...new Set([
@@ -355,7 +371,7 @@ async function refreshAll() {
       ...(Array.isArray(positions) ? positions : []).map(p => p.symbol),
     ])];
     await fetchCurrentPrices(priceSymbols);
-    renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs); renderTrack(track);
+    renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs); renderTrack(track); renderClosed(closedAll);
     $('lastUpdate').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
   } catch (e) {
     if (e.message !== 'unauthorized') banner('error', '刷新失败: ' + e.message);
@@ -441,6 +457,101 @@ function renderPositions(positions) {
   }
 }
 
+// ====== 已平仓（盈亏明细 + 每日/累计曲线） ======
+function fmtDayShanghai(ts) {
+  return new Date(ts).toLocaleDateString('zh-CN', { timeZone: 'Asia/Shanghai', month: '2-digit', day: '2-digit' });
+}
+
+function renderClosed(closedAll) {
+  const rows = (Array.isArray(closedAll) ? closedAll : []).filter(p => p.status === 'closed' && p.exit_price != null);
+  $('cntClosed').textContent = rows.length;
+  const body = $('closedBody');
+  body.innerHTML = '';
+  $('closedEmpty').style.display = rows.length ? 'none' : 'block';
+
+  let total = 0, wins = 0;
+  for (const p of rows) {
+    const pnl = (p.exit_price - p.entry_price) * p.qty;
+    const pnlPct = p.entry_price > 0 ? (p.exit_price - p.entry_price) / p.entry_price * 100 : 0;
+    total += pnl;
+    if (pnl > 0) wins++;
+    const tr = document.createElement('tr');
+    tr.innerHTML = `
+      <td><a class="sym-jump" href="/?symbol=${p.symbol?.replace('USDT', '')}" target="_blank" title="查看多空比趋势"><b>${p.symbol?.replace('USDT', '')}</b></a></td>
+      <td class="mono">${fmtNum(p.entry_price, 6)}</td>
+      <td class="mono">${fmtNum(p.exit_price, 6)}</td>
+      <td>${fmtNum(p.qty, 2)}</td>
+      <td class="${pnl >= 0 ? 'positive' : 'negative'} mono">${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} U (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)</td>
+      <td>${logReasonLabel(p.close_reason) || p.close_reason || '--'}</td>
+      <td class="muted">${fmtTime(p.opened_at)}</td>
+      <td class="muted">${fmtTime(p.closed_at)}</td>`;
+    body.appendChild(tr);
+  }
+
+  const winRate = rows.length ? (wins / rows.length * 100).toFixed(1) : '0.0';
+  const stat = (label, val, cls) => `<div style="background:#161b22;border:1px solid #30363d;border-radius:8px;padding:8px 14px;min-width:110px;"><div style="color:#8b949e;font-size:11px;">${label}</div><div class="${cls || ''}" style="font-size:16px;font-weight:600;">${val}</div></div>`;
+  $('closedStats').innerHTML =
+    stat('总盈利', `${total >= 0 ? '+' : ''}${total.toFixed(3)} U`, total >= 0 ? 'positive' : 'negative') +
+    stat('平仓笔数', rows.length) +
+    stat('胜率', winRate + '%', wins * 2 >= rows.length ? 'positive' : 'negative');
+
+  // 按上海时区分天聚合（rows 为倒序，反转为时间正序后 Map 保持插入顺序即日期升序）
+  const byDay = new Map();
+  for (const p of [...rows].reverse()) {
+    const day = fmtDayShanghai(p.closed_at || p.opened_at);
+    byDay.set(day, (byDay.get(day) || 0) + (p.exit_price - p.entry_price) * p.qty);
+  }
+  let cum = 0;
+  const daily = [...byDay.entries()].map(([day, pnl]) => ({ day, pnl, cum: (cum += pnl) }));
+  renderClosedChart(daily);
+}
+
+/** 每日盈亏(蓝)与累计盈亏(绿)双折线，纯 SVG 无外部依赖 */
+function renderClosedChart(daily) {
+  const el = $('closedChart');
+  if (!daily.length) { el.innerHTML = '<div class="empty" style="padding:20px;">暂无平仓数据</div>'; return; }
+  const W = 880, H = 240, PL = 54, PR = 40, PT = 18, PB = 28;
+  const iw = W - PL - PR, ih = H - PT - PB;
+  const vals = daily.flatMap(d => [d.pnl, d.cum, 0]);
+  let min = Math.min(...vals), max = Math.max(...vals);
+  if (max - min < 1e-9) { max += 1; min -= 1; }
+  const padv = (max - min) * 0.1; min -= padv; max += padv;
+  const x = i => PL + (daily.length === 1 ? iw / 2 : i / (daily.length - 1) * iw);
+  const y = v => PT + ih - (v - min) / (max - min) * ih;
+  const line = key => daily.map((d, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(d[key]).toFixed(1)}`).join(' ');
+  const fmtV = v => (v >= 0 ? '+' : '') + v.toFixed(2);
+
+  let grid = '', ylabels = '';
+  for (let k = 0; k <= 4; k++) {
+    const v = min + (max - min) * k / 4;
+    const yy = y(v).toFixed(1);
+    grid += `<line x1="${PL}" y1="${yy}" x2="${W - PR}" y2="${yy}" stroke="#21262d" stroke-width="1"/>`;
+    ylabels += `<text x="${PL - 6}" y="${+yy + 3}" text-anchor="end" font-size="10" fill="#8b949e">${fmtV(v)}</text>`;
+  }
+  const step = Math.max(1, Math.ceil(daily.length / 10));
+  let xlabels = '';
+  daily.forEach((d, i) => {
+    if (i % step === 0 || i === daily.length - 1) {
+      xlabels += `<text x="${x(i).toFixed(1)}" y="${H - 8}" text-anchor="middle" font-size="10" fill="#8b949e">${d.day}</text>`;
+    }
+  });
+  let dots = '';
+  daily.forEach((d, i) => {
+    dots += `<circle cx="${x(i).toFixed(1)}" cy="${y(d.pnl).toFixed(1)}" r="3" fill="#58a6ff"><title>${d.day} 当日 ${fmtV(d.pnl)} U</title></circle>`;
+    dots += `<circle cx="${x(i).toFixed(1)}" cy="${y(d.cum).toFixed(1)}" r="3" fill="#3fb950"><title>${d.day} 累计 ${fmtV(d.cum)} U</title></circle>`;
+  });
+  el.innerHTML = `
+    <svg viewBox="0 0 ${W} ${H}" style="width:100%;height:auto;display:block;">
+      ${grid}${ylabels}
+      <line x1="${PL}" y1="${y(0).toFixed(1)}" x2="${W - PR}" y2="${y(0).toFixed(1)}" stroke="#30363d" stroke-width="1" stroke-dasharray="4 3"/>
+      <path d="${line('pnl')}" fill="none" stroke="#58a6ff" stroke-width="1.5"/>
+      <path d="${line('cum')}" fill="none" stroke="#3fb950" stroke-width="1.8"/>
+      ${dots}${xlabels}
+      <text x="${W - PR}" y="${PT - 6}" text-anchor="end" font-size="10" fill="#3fb950">■ 累计盈亏</text>
+      <text x="${W - PR - 90}" y="${PT - 6}" text-anchor="end" font-size="10" fill="#58a6ff">■ 每日盈亏</text>
+    </svg>`;
+}
+
 // ====== 操作日志详情人话化 ======
 const LOG_REASON_LABEL = {
   ttl_expired: '挂单超时未成交',
@@ -518,7 +629,7 @@ function renderLogs(logs) {
 
 function switchTab(name) {
   document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
-  ['orders', 'positions', 'logs', 'track', 'config'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
+  ['orders', 'positions', 'logs', 'closed', 'track', 'config'].forEach(n => { $('tab-' + n).style.display = n === name ? 'block' : 'none'; });
 }
 
 // ====== 币况追踪 ======

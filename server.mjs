@@ -27,7 +27,7 @@ import { initPositionHealthMonitor, startPositionHealthScheduler, runPositionHea
 import { initSmartTrendMonitor, startSmartTrendScheduler, runSmartTrendPush, onWatchlistUpdated, captureDaily8amRatioBaseline, getLatestDecisionPush } from './smart-trend-monitor.mjs';
 import { initSmartTrendWatchlist, startSmartTrendWatchlistScheduler, getWatchSymbols, getWatchlistGroups, getWatchlistInfo, refreshSmartTrendWatchlist } from './smart-trend-watchlist.mjs';
 import { initDBStorage, saveToDatabase, closeDB } from "./db-integration.mjs";
-import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getTradeLogs, getRuntimeConfig, updateRuntimeConfig, getSymbolTrackStats } from './auto-trader.mjs';
+import { startAutoTrader, stopAutoTrader, getAutoTraderStatus, runTickNow, apiConsoleStatus, apiCancelOrder, apiClosePosition, apiPanicCancel, getAllOrders, getOpenPositions, getAllPositions, getTradeLogs, getRuntimeConfig, updateRuntimeConfig, getSymbolTrackStats } from './auto-trader.mjs';
 
 import { handleTrendAPI } from "./api-trend.mjs";
 const FETCH_TIMEOUT_MS = 15000;
@@ -2236,6 +2236,15 @@ async function getFuturesSymbols() {
     }
     res.writeHead(200, tradeHeaders);
     res.end(JSON.stringify(getOpenPositions()));
+    return;
+  }
+  // 已平仓记录（含 open/closed 全量，前端按 status 过滤，供已平仓 tab 与盈亏曲线）
+  if (url.pathname === '/api/trade/closed-positions') {
+    if (!tradePwdOk(req.headers['x-trade-password'])) {
+      res.writeHead(401, tradeHeaders); res.end(JSON.stringify({ error: 'unauthorized' })); return;
+    }
+    res.writeHead(200, tradeHeaders);
+    res.end(JSON.stringify(getAllPositions({ limit: 500 })));
     return;
   }
   if (url.pathname === '/api/trade/logs') {

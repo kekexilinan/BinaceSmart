@@ -17,7 +17,7 @@ import {
 } from './binance-client.mjs';
 import {
   insertAutoOrder, updateAutoOrder, queryActiveAutoOrders, queryAutoOrders,
-  insertAutoPosition, updateAutoPosition, queryOpenPositions,
+  insertAutoPosition, updateAutoPosition, queryOpenPositions, queryAllPositions,
   logAutoTrade, queryLatestSnapshot, queryLatestDecision, queryAutoTradeLogs,
   insertTickSymbols, querySymbolTickStats, queryTickTimes, querySymbolSeenTicks,
 } from './db.mjs';
@@ -798,7 +798,7 @@ export async function runTickNow() {
   }
 }
 
-export { queryActiveAutoOrders as getActiveOrders, queryOpenPositions as getOpenPositions, queryAutoOrders as getAllOrders, queryAutoTradeLogs as getTradeLogs };
+export { queryActiveAutoOrders as getActiveOrders, queryOpenPositions as getOpenPositions, queryAllPositions as getAllPositions, queryAutoOrders as getAllOrders, queryAutoTradeLogs as getTradeLogs };
 
 // ==================== 管理台操作 API（供 trade-console 页面） ====================
 
