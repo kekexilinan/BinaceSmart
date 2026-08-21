@@ -192,7 +192,7 @@ tr:hover td { background: #1c2128; }
     <div class="table-wrap">
       <table>
         <thead><tr>
-          <th>币种</th><th>开仓价</th><th>数量</th><th>名义值</th><th>TP 价</th><th>SL 价</th><th>开仓时间</th><th>操作</th>
+          <th>币种</th><th>开仓价</th><th>现价</th><th>盈利</th><th>数量</th><th>名义值</th><th>TP 价</th><th>SL 价</th><th>开仓时间</th><th>操作</th>
         </tr></thead>
         <tbody id="positionsBody"></tbody>
       </table>
@@ -349,8 +349,12 @@ async function refreshAll() {
     const [status, orders, positions, logs, track] = await Promise.all([
       api('/api/trade/status'), api('/api/trade/orders'), api('/api/trade/positions'), api('/api/trade/logs?limit=200'), api('/api/trade/symbol-track'),
     ]);
-    const orderSymbols = [...new Set((Array.isArray(orders) ? orders : []).filter(o => o.status === 'pending').map(o => o.symbol))];
-    await fetchCurrentPrices(orderSymbols);
+    // 挂单与持仓都需展示现价/盈利，一并拉取
+    const priceSymbols = [...new Set([
+      ...(Array.isArray(orders) ? orders : []).filter(o => o.status === 'pending').map(o => o.symbol),
+      ...(Array.isArray(positions) ? positions : []).map(p => p.symbol),
+    ])];
+    await fetchCurrentPrices(priceSymbols);
     renderStatus(status); renderOrders(orders); renderPositions(positions); renderLogs(logs); renderTrack(track);
     $('lastUpdate').textContent = '更新于 ' + new Date().toLocaleTimeString('zh-CN');
   } catch (e) {
@@ -416,10 +420,17 @@ function renderPositions(positions) {
   $('positionsEmpty').style.display = openPositions.length ? 'none' : 'block';
   for (const p of openPositions) {
     const notional = p.entry_price * p.qty;
+    const curPrice = currentPrices[p.symbol] || 0;
+    // U 本位多头：盈利金额 = (现价-开仓价)×数量；百分比相对开仓价
+    const pnl = curPrice > 0 && p.entry_price > 0 ? (curPrice - p.entry_price) * p.qty : null;
+    const pnlPct = curPrice > 0 && p.entry_price > 0 ? (curPrice - p.entry_price) / p.entry_price * 100 : null;
+    const pnlCls = pnl != null && pnl >= 0 ? 'positive' : 'negative';
     const tr = document.createElement('tr');
     tr.innerHTML = `
       <td><a class="sym-jump" href="/?symbol=${p.symbol?.replace('USDT', '')}" target="_blank" title="查看多空比趋势"><b>${p.symbol?.replace('USDT', '')}</b></a></td>
       <td class="mono">${fmtNum(p.entry_price, 6)}</td>
+      <td class="mono">${curPrice > 0 ? fmtNum(curPrice, 6) : '--'}</td>
+      <td class="${pnlCls} mono">${pnl != null ? `${pnl >= 0 ? '+' : ''}${pnl.toFixed(3)} U (${pnlPct >= 0 ? '+' : ''}${pnlPct.toFixed(2)}%)` : '--'}</td>
       <td>${fmtNum(p.qty, 2)}</td>
       <td class="muted">${fmtNum(notional, 2)} U</td>
       <td class="positive mono">${p.tp_price ? fmtNum(p.tp_price, 6) : '--'}</td>
