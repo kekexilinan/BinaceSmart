@@ -130,6 +130,14 @@ export async function startAutoTrader(opts = {}) {
     }
   }
 
+  // 启动对账：进程重启（部署/崩溃）可能打断上一 tick 的成交检测，重启期间挂单若成交会成为孤儿仓。
+  // 立即补查所有活跃挂单的成交状态，不等下一个 :50 tick，把漏检窗口从最长 1 小时缩到秒级
+  try {
+    const active = queryActiveAutoOrders();
+    for (const order of active) await syncOrderFill(order);
+    if (active.length) logger.log?.(`  🔄 启动对账完成: ${active.length} 个活跃挂单已核对成交状态`);
+  } catch (e) { logger.warn?.(`  ⚠ 启动对账失败: ${e.message}`); }
+
   scheduleTick();
 }
 
