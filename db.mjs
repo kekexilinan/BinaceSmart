@@ -297,6 +297,8 @@ export function querySymbolTrend({ symbol, range = '24h', limit = 200 } = {}) {
 
 /** 推送专属列：鲸鱼采集批次不含这些字段，读取时从该币最近一次非空记录回填 */
 const SNAPSHOT_BACKFILL_COLS = ['market_cap', 'score', 'change_since_8am', 'volume', 'top_vs_global'];
+/** 回填仅查最近24h：推送周期50min、采集15min，24h足够覆盖；且 timestamp 条件可走(symbol,timestamp)索引，避免大表全表扫描撑爆 sql.js 内存 */
+const BACKFILL_WINDOW_MS = 24 * 60 * 60 * 1000;
 
 /** 查询最新一批快照的所有币种 */
 export function queryLatestSnapshot() {
@@ -314,30 +316,36 @@ export function queryLatestSnapshot() {
   const rows = rowsToObjects(results[0]);
 
   // 列级回填：鲸鱼采集(15min)与聪明钱推送(50min)交替写入，
-  // 鲸鱼批次成为最新行时市值/评分/8am涨幅/成交额会缺失，从最近一次非空行补齐，避免列闪烁
-  const pending = rows.filter(r => SNAPSHOT_BACKFILL_COLS.some(c => r[c] == null));
-  if (pending.length) {
-    for (const col of SNAPSHOT_BACKFILL_COLS) {
-      const needSymbols = pending.filter(r => r[col] == null).map(r => r.symbol);
-      if (!needSymbols.length) continue;
-      const placeholders = needSymbols.map(() => '?').join(',');
-      const res = db.exec(`
-        SELECT s.symbol, s.${col}
-        FROM symbol_snapshot s
-        INNER JOIN (
-          SELECT symbol, MAX(timestamp) as ts
-          FROM symbol_snapshot
-          WHERE ${col} IS NOT NULL AND symbol IN (${placeholders})
-          GROUP BY symbol
-        ) m ON s.symbol = m.symbol AND s.timestamp = m.ts
-      `, needSymbols);
-      if (res.length) {
-        const valMap = new Map(rowsToObjects(res[0]).map(r => [r.symbol, r[col]]));
-        for (const row of rows) {
-          if (row[col] == null && valMap.has(row.symbol)) row[col] = valMap.get(row.symbol);
+  // 鲸鱼批次成为最新行时市值/评分/8am涨幅/成交额会缺失，从最近一次非空行补齐，避免列闪烁。
+  // 回填属于增强功能：限定24h窗口走索引，整体兜底 try-catch，异常绝不拖垮主查询
+  try {
+    const pending = rows.filter(r => SNAPSHOT_BACKFILL_COLS.some(c => r[c] == null));
+    if (pending.length) {
+      const since = Date.now() - BACKFILL_WINDOW_MS;
+      for (const col of SNAPSHOT_BACKFILL_COLS) {
+        const needSymbols = pending.filter(r => r[col] == null).map(r => r.symbol);
+        if (!needSymbols.length) continue;
+        const placeholders = needSymbols.map(() => '?').join(',');
+        const res = db.exec(`
+          SELECT s.symbol, s.${col}
+          FROM symbol_snapshot s
+          INNER JOIN (
+            SELECT symbol, MAX(timestamp) as ts
+            FROM symbol_snapshot
+            WHERE symbol IN (${placeholders}) AND timestamp >= ? AND ${col} IS NOT NULL
+            GROUP BY symbol
+          ) m ON s.symbol = m.symbol AND s.timestamp = m.ts
+        `, [...needSymbols, since]);
+        if (res.length) {
+          const valMap = new Map(rowsToObjects(res[0]).map(r => [r.symbol, r[col]]));
+          for (const row of rows) {
+            if (row[col] == null && valMap.has(row.symbol)) row[col] = valMap.get(row.symbol);
+          }
         }
       }
     }
+  } catch (err) {
+    console.error('[db] 快照回填失败(不影响主查询):', err?.message || err);
   }
   return rows;
 }
